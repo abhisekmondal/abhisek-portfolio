@@ -25,4 +25,4 @@ jobs:
         context: .
         file: ./Dockerfile
         push: true
-        tags: abhisek007/portfolio:latest
+        tags: abhisek010/portfolio:latest
