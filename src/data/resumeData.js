@@ -153,7 +153,7 @@ export const certifications = [
   {
     name: "Cisco Certified Network Associate Routing and Switching (CCNA)",
     issuer: "Cisco",
-    code: "CCNA",
+    code: "200-301",
     level: "Associate",
     focus: "Routing and Switching",
     status: "Expired",
