@@ -12,13 +12,14 @@ A modern, dark-themed DevOps portfolio with a built-in ATS-friendly downloadable
 ## Routes
 - `/` — Portfolio (dark, dev-themed)
 - `/resume` — ATS-friendly resume page with **Download PDF** button (uses browser print → Save as PDF)
+- `/certifications` — Certification path with official issuer links and optional verification URLs
 
 ## Edit Your Content
 All resume content lives in **one file**:
 ```
 src/data/resumeData.js
 ```
-Edit profile, summary, skills, experience, certifications, and education there — both pages update automatically.
+Edit profile, summary, skills, experience, certifications, and education there — all pages update automatically.
 
 ---
 
