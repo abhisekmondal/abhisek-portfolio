@@ -187,8 +187,13 @@ const Home = () => {
       {/* CERTS + EDU */}
       <section className="max-w-6xl mx-auto px-6 py-24 grid lg:grid-cols-2 gap-10">
         <div data-testid="certs-section">
-          <div className="section-label">Certifications</div>
-          <h2 className="font-display text-3xl font-bold mt-4 mb-8">Validated, in writing.</h2>
+            <div className="section-label">Certifications</div>
+            <div className="flex items-center justify-between gap-4 flex-wrap mt-4 mb-8">
+              <h2 className="font-display text-3xl font-bold">Validated, in writing.</h2>
+              <Link to="/certifications" className="btn btn-ghost text-xs" data-testid="certification-path-btn">
+                Certification Path <ArrowRight size={12} />
+              </Link>
+            </div>
           <div className="space-y-3">
             {certifications.map((c, i) => (
               <div key={c.name} className="p-5 rounded-xl border border-[var(--border)] bg-[var(--surface)] flex items-start gap-4 hover:border-[var(--accent)] transition-colors" data-testid={`cert-${i}`}>
@@ -197,7 +202,9 @@ const Home = () => {
                 </span>
                 <div>
                   <div className="font-medium">{c.name}</div>
-                  <div className="font-mono text-xs text-[var(--text-mute)] mt-1">{c.issuer}</div>
+                  <div className="font-mono text-xs text-[var(--text-mute)] mt-1">
+                    {[c.issuer, c.code, c.level].filter(Boolean).join(" · ")}
+                  </div>
                 </div>
               </div>
             ))}
@@ -274,6 +281,7 @@ const Nav = () => (
       <a href="#about" className="link-underline hover:text-[var(--accent)] transition-colors" data-testid="nav-about">about</a>
       <a href="#skills" className="link-underline hover:text-[var(--accent)] transition-colors" data-testid="nav-skills">stack</a>
       <a href="#experience" className="link-underline hover:text-[var(--accent)] transition-colors" data-testid="nav-experience">experience</a>
+      <Link to="/certifications" className="link-underline hover:text-[var(--accent)] transition-colors" data-testid="nav-certifications">certifications</Link>
       <a href="#contact" className="link-underline hover:text-[var(--accent)] transition-colors" data-testid="nav-contact">contact</a>
     </div>
     <Link to="/resume" className="btn btn-ghost text-xs" data-testid="nav-resume">
