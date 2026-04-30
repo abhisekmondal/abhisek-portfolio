@@ -1,319 +1,921 @@
-import React from "react";
-import { Link } from "react-router-dom";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
-  Mail, Phone, MapPin, Linkedin, ArrowRight, Download, Cloud, Container,
-  GitBranch, ServerCog, ShieldCheck, Activity, Terminal, Sparkles, ExternalLink, Award
+  Award,
+  BriefcaseBusiness,
+  Cloud,
+  Copy,
+  FileJson,
+  FileText,
+  GraduationCap,
+  LayoutTemplate,
+  Plus,
+  Printer,
+  RefreshCcw,
+  Sparkles,
+  Trash2,
+  Upload,
+  UserRound,
+  Wrench,
 } from "lucide-react";
 import {
-  profile, summary, focusAreas, skillGroups, experience,
-  certifications, education, stats
-} from "@/data/resumeData";
+  CertificationForm,
+  EducationForm,
+  ExperienceForm,
+  ProfileForm,
+  ProjectForm,
+  SelectField,
+  SkillsForm,
+  StatusPill,
+  SummaryForm,
+} from "@/components/resume/ResumeEditor";
+import ResumePreview from "@/components/resume/ResumePreview";
+import { builderSettings, emptyResume, sampleResume } from "@/data/builderDefaults";
+import {
+  clone,
+  getCompletion,
+  getResumeIssues,
+  normalizeResume,
+  normalizeSettings,
+  parseResumeJson,
+  readStoredJson,
+} from "@/lib/resumeSchema";
+import {
+  checkApiHealth,
+  deleteResumeFromApi,
+  getResumeFromApi,
+  getStoredUser,
+  getClientId,
+  importResumeFile,
+  listResumesFromApi,
+  loginUser,
+  logoutUser,
+  loadLatestResumeFromApi,
+  registerUser,
+  saveResumeToApi,
+} from "@/lib/resumeApi";
 
-const focusIcons = [GitBranch, Cloud, Container, ServerCog, Activity, ShieldCheck];
+const STORAGE_KEY = "resume-builder-draft-v2";
+const SETTINGS_KEY = "resume-builder-settings-v1";
+const RESUME_ID_KEY = "resume-builder-current-id-v1";
+
+const tabs = [
+  { id: "profile", label: "Profile", icon: UserRound },
+  { id: "summary", label: "Summary", icon: FileText },
+  { id: "experience", label: "Experience", icon: BriefcaseBusiness },
+  { id: "skills", label: "Skills", icon: Wrench },
+  { id: "projects", label: "Projects", icon: Sparkles },
+  { id: "education", label: "Education", icon: GraduationCap },
+  { id: "certifications", label: "Certs", icon: Award },
+];
+
+const sectionToggles = [
+  { id: "summary", label: "Summary" },
+  { id: "skills", label: "Skills" },
+  { id: "experience", label: "Experience" },
+  { id: "projects", label: "Projects" },
+  { id: "education", label: "Education" },
+  { id: "certifications", label: "Certs" },
+];
 
 const Home = () => {
+  const fileInputRef = useRef(null);
+  const [activeTab, setActiveTab] = useState("profile");
+  const [resume, setResume] = useState(() => readStoredJson(STORAGE_KEY, sampleResume, normalizeResume));
+  const [settings, setSettings] = useState(() => readStoredJson(SETTINGS_KEY, builderSettings, normalizeSettings));
+  const [resumeId, setResumeId] = useState(() => localStorage.getItem(RESUME_ID_KEY) || "");
+  const [clientId] = useState(() => getClientId());
+  const [user, setUser] = useState(() => getStoredUser());
+  const [authMode, setAuthMode] = useState("login");
+  const [authForm, setAuthForm] = useState({ name: "", email: "", password: "" });
+  const [cloudResumes, setCloudResumes] = useState([]);
+  const [cloudLoading, setCloudLoading] = useState(false);
+  const [apiStatus, setApiStatus] = useState("checking");
+  const [apiMessage, setApiMessage] = useState("Checking cloud storage...");
+  const [saveState, setSaveState] = useState("Saved");
+  const [notice, setNotice] = useState("");
+
+  useEffect(() => {
+    if (saveState !== "Saving") return undefined;
+    const timeoutId = window.setTimeout(() => {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(normalizeResume(resume)));
+      setSaveState("Saved");
+    }, 450);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [resume, saveState]);
+
+  useEffect(() => {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(normalizeSettings(settings)));
+  }, [settings]);
+
+  const completion = useMemo(() => getCompletion(resume), [resume]);
+  const issues = useMemo(() => getResumeIssues(resume), [resume]);
+
+  useEffect(() => {
+    checkCloudStatus({ quiet: true }).then((online) => {
+      if (online) refreshCloudResumes({ quiet: true });
+    });
+  }, []);
+
+  const checkCloudStatus = async ({ quiet = false } = {}) => {
+    try {
+      await checkApiHealth();
+      setApiStatus("online");
+      setApiMessage("Cloud storage online");
+      if (!quiet) setNotice("Cloud storage is online.");
+      return true;
+    } catch (error) {
+      setApiStatus("offline");
+      setApiMessage("Cloud storage offline. Local autosave is active.");
+      if (!quiet) setNotice(`Cloud storage unavailable: ${error.message}`);
+      return false;
+    }
+  };
+
+  const updateProfile = (field, value) => {
+    setSaveState("Saving");
+    setResume((current) => ({
+      ...current,
+      profile: { ...current.profile, [field]: value },
+    }));
+  };
+
+  const updateRoot = (field, value) => {
+    setSaveState("Saving");
+    setResume((current) => ({ ...current, [field]: value }));
+  };
+
+  const updateSectionVisibility = (section, visible) => {
+    setSaveState("Saving");
+    setResume((current) => ({
+      ...current,
+      sections: { ...current.sections, [section]: visible },
+    }));
+  };
+
+  const updateCollection = (collection, index, field, value) => {
+    setSaveState("Saving");
+    setResume((current) => ({
+      ...current,
+      [collection]: current[collection].map((item, itemIndex) =>
+        itemIndex === index ? { ...item, [field]: value } : item,
+      ),
+    }));
+  };
+
+  const updateBullet = (collection, itemIndex, bulletIndex, value) => {
+    setSaveState("Saving");
+    setResume((current) => ({
+      ...current,
+      [collection]: current[collection].map((item, index) =>
+        index === itemIndex
+          ? {
+              ...item,
+              bullets: item.bullets.map((bullet, bIndex) => (bIndex === bulletIndex ? value : bullet)),
+            }
+          : item,
+      ),
+    }));
+  };
+
+  const updateSkill = (groupIndex, itemIndex, value) => {
+    setSaveState("Saving");
+    setResume((current) => ({
+      ...current,
+      skills: current.skills.map((group, index) =>
+        index === groupIndex
+          ? {
+              ...group,
+              items: group.items.map((skill, sIndex) => (sIndex === itemIndex ? value : skill)),
+            }
+          : group,
+      ),
+    }));
+  };
+
+  const addItem = (collection, item) => {
+    setSaveState("Saving");
+    setResume((current) => ({ ...current, [collection]: [...current[collection], clone(item)] }));
+  };
+
+  const removeItem = (collection, index) => {
+    setSaveState("Saving");
+    setResume((current) => ({
+      ...current,
+      [collection]: current[collection].filter((_, itemIndex) => itemIndex !== index),
+    }));
+  };
+
+  const addBullet = (collection, index) => {
+    setSaveState("Saving");
+    setResume((current) => ({
+      ...current,
+      [collection]: current[collection].map((item, itemIndex) =>
+        itemIndex === index ? { ...item, bullets: [...item.bullets, ""] } : item,
+      ),
+    }));
+  };
+
+  const removeBullet = (collection, itemIndex, bulletIndex) => {
+    setSaveState("Saving");
+    setResume((current) => ({
+      ...current,
+      [collection]: current[collection].map((item, index) =>
+        index === itemIndex
+          ? { ...item, bullets: item.bullets.filter((_, bIndex) => bIndex !== bulletIndex) }
+          : item,
+      ),
+    }));
+  };
+
+  const addSkill = (groupIndex) => {
+    setSaveState("Saving");
+    setResume((current) => ({
+      ...current,
+      skills: current.skills.map((group, index) =>
+        index === groupIndex ? { ...group, items: [...group.items, ""] } : group,
+      ),
+    }));
+  };
+
+  const removeSkill = (groupIndex, skillIndex) => {
+    setSaveState("Saving");
+    setResume((current) => ({
+      ...current,
+      skills: current.skills.map((group, index) =>
+        index === groupIndex
+          ? { ...group, items: group.items.filter((_, sIndex) => sIndex !== skillIndex) }
+          : group,
+      ),
+    }));
+  };
+
+  const resetToSample = () => {
+    setSaveState("Saving");
+    setResumeId("");
+    localStorage.removeItem(RESUME_ID_KEY);
+    setNotice("Sample resume loaded.");
+    setResume(normalizeResume(sampleResume));
+    setActiveTab("profile");
+  };
+
+  const clearResume = () => {
+    setSaveState("Saving");
+    setResumeId("");
+    localStorage.removeItem(RESUME_ID_KEY);
+    setNotice("Blank resume created. Fill the editor fields, then use Cloud Save.");
+    setResume(normalizeResume(emptyResume));
+    setActiveTab("profile");
+  };
+
+  const exportJson = () => {
+    const blob = new Blob([JSON.stringify(normalizeResume(resume), null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${resume.profile.name || "resume"}-builder-data.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const importResume = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    try {
+      setCloudLoading(true);
+      setNotice(`Importing ${file.name}...`);
+      let importedResume;
+
+      if (file.name.toLowerCase().endsWith(".json") || file.type === "application/json") {
+        const text = await file.text();
+        const result = parseResumeJson(text);
+        if (!result.ok) {
+          setNotice(result.error);
+          return;
+        }
+        importedResume = result.resume;
+      } else {
+        const result = await importResumeFile(file);
+        importedResume = result.resume;
+      }
+
+      setSaveState("Saving");
+      setResumeId("");
+      localStorage.removeItem(RESUME_ID_KEY);
+      setResume(normalizeResume(importedResume));
+      setActiveTab("profile");
+      setNotice(`Imported ${file.name}. Review the extracted fields before saving.`);
+    } catch (error) {
+      setNotice(`Import failed: ${error.message}`);
+    } finally {
+      setCloudLoading(false);
+      event.target.value = "";
+    }
+  };
+
+  const saveToCloud = async () => {
+    try {
+      setCloudLoading(true);
+      setNotice("Saving to database...");
+      const result = await saveResumeToApi(resumeId, normalizeResume(resume));
+      setApiStatus("online");
+      setApiMessage("Cloud storage online");
+      setResumeId(result.resume.id);
+      localStorage.setItem(RESUME_ID_KEY, result.resume.id);
+      setNotice(`Saved to database: ${result.resume.title}`);
+      await refreshCloudResumes({ quiet: true });
+    } catch (error) {
+      setApiStatus("offline");
+      setApiMessage("Cloud storage offline. Local autosave is active.");
+      setNotice(`Database save failed: ${error.message}`);
+    } finally {
+      setCloudLoading(false);
+    }
+  };
+
+  const saveAsNewCloudResume = async () => {
+    try {
+      setCloudLoading(true);
+      setNotice("Creating a database copy...");
+      const result = await saveResumeToApi("", normalizeResume(resume));
+      setApiStatus("online");
+      setApiMessage("Cloud storage online");
+      setResumeId(result.resume.id);
+      localStorage.setItem(RESUME_ID_KEY, result.resume.id);
+      setNotice(`Created new database resume: ${result.resume.title}`);
+      await refreshCloudResumes({ quiet: true });
+    } catch (error) {
+      setApiStatus("offline");
+      setApiMessage("Cloud storage offline. Local autosave is active.");
+      setNotice(`Database copy failed: ${error.message}`);
+    } finally {
+      setCloudLoading(false);
+    }
+  };
+
+  const loadLatestFromCloud = async () => {
+    try {
+      setCloudLoading(true);
+      setNotice("Loading latest database resume...");
+      const result = await loadLatestResumeFromApi();
+      setApiStatus("online");
+      setApiMessage("Cloud storage online");
+      if (!result?.resume) {
+        setNotice("No database resumes found yet.");
+        return;
+      }
+      setResumeId(result.resume.id);
+      localStorage.setItem(RESUME_ID_KEY, result.resume.id);
+      setSaveState("Saving");
+      setResume(normalizeResume(result.resume.data));
+      setNotice(`Loaded from database: ${result.resume.title}`);
+      await refreshCloudResumes({ quiet: true });
+    } catch (error) {
+      setApiStatus("offline");
+      setApiMessage("Cloud storage offline. Local autosave is active.");
+      setNotice(`Database load failed: ${error.message}`);
+    } finally {
+      setCloudLoading(false);
+    }
+  };
+
+  const refreshCloudResumes = async ({ quiet = false } = {}) => {
+    try {
+      setCloudLoading(true);
+      if (!quiet) setNotice("Refreshing database resumes...");
+      const result = await listResumesFromApi();
+      setApiStatus("online");
+      setApiMessage("Cloud storage online");
+      setCloudResumes(result.resumes || []);
+      if (!quiet) setNotice(`Loaded ${result.resumes?.length || 0} database resumes.`);
+    } catch (error) {
+      setApiStatus("offline");
+      setApiMessage("Cloud storage offline. Local autosave is active.");
+      if (!quiet) setNotice(`Could not load database resumes: ${error.message}`);
+    } finally {
+      setCloudLoading(false);
+    }
+  };
+
+  const loadCloudResume = async (id) => {
+    try {
+      setCloudLoading(true);
+      setNotice("Loading database resume...");
+      const result = await getResumeFromApi(id);
+      setApiStatus("online");
+      setApiMessage("Cloud storage online");
+      setResumeId(result.resume.id);
+      localStorage.setItem(RESUME_ID_KEY, result.resume.id);
+      setSaveState("Saving");
+      setResume(normalizeResume(result.resume.data));
+      setNotice(`Loaded from database: ${result.resume.title}`);
+    } catch (error) {
+      setApiStatus("offline");
+      setApiMessage("Cloud storage offline. Local autosave is active.");
+      setNotice(`Database load failed: ${error.message}`);
+    } finally {
+      setCloudLoading(false);
+    }
+  };
+
+  const deleteCloudResume = async (id) => {
+    try {
+      setCloudLoading(true);
+      setNotice("Deleting database resume...");
+      await deleteResumeFromApi(id);
+      setApiStatus("online");
+      setApiMessage("Cloud storage online");
+      if (resumeId === id) {
+        setResumeId("");
+        localStorage.removeItem(RESUME_ID_KEY);
+      }
+      await refreshCloudResumes({ quiet: true });
+      setNotice("Database resume deleted.");
+    } catch (error) {
+      setApiStatus("offline");
+      setApiMessage("Cloud storage offline. Local autosave is active.");
+      setNotice(`Database delete failed: ${error.message}`);
+    } finally {
+      setCloudLoading(false);
+    }
+  };
+
+  const submitAuth = async (event) => {
+    event.preventDefault();
+    try {
+      setNotice(authMode === "login" ? "Signing in..." : "Creating account...");
+      setCloudLoading(true);
+      const result = authMode === "login" ? await loginUser(authForm) : await registerUser(authForm);
+      setApiStatus("online");
+      setApiMessage("Cloud storage online");
+      setUser(result.user);
+      setAuthForm({ name: "", email: "", password: "" });
+      setNotice(
+        result.claimed
+          ? `Signed in as ${result.user.email}. Moved ${result.claimed} workspace resume${result.claimed === 1 ? "" : "s"} into this account.`
+          : `Signed in as ${result.user.email}.`,
+      );
+      await refreshCloudResumes({ quiet: true });
+    } catch (error) {
+      setApiStatus("offline");
+      setApiMessage("Cloud storage offline. Local autosave is active.");
+      setNotice(error.message);
+    } finally {
+      setCloudLoading(false);
+    }
+  };
+
+  const logout = async () => {
+    logoutUser();
+    const sample = normalizeResume(sampleResume);
+    setUser(null);
+    setResumeId("");
+    localStorage.removeItem(RESUME_ID_KEY);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(sample));
+    setCloudResumes([]);
+    setSaveState("Saved");
+    setResume(sample);
+    setActiveTab("profile");
+    setNotice("");
+    await refreshCloudResumes({ quiet: true });
+  };
+
+  if (!user) {
+    return (
+      <div className="builder-app min-h-screen bg-[var(--bg)] text-[var(--text)]">
+        <header className="guest-topbar">
+          <div className="topbar-copy">
+            <div className="section-label">
+              <LayoutTemplate size={14} /> Resume Builder
+            </div>
+            <h1 className="font-display text-3xl md:text-5xl font-extrabold mt-3">
+              Build a polished resume with live preview.
+            </h1>
+            <p>
+              Preview the builder with sample data. Create an account or sign in to unlock editing,
+              cloud storage, imports, exports, and PDF tools.
+            </p>
+            <div className="product-highlights">
+              <span>Sample preview</span>
+              <span>ATS-friendly layout</span>
+              <span>Cloud workspace after login</span>
+            </div>
+          </div>
+        </header>
+
+        <main className="guest-layout">
+          <section className="guest-auth no-print">
+            <div>
+              <div className="field-label">Private workspace</div>
+              <h2>Sign in to start building</h2>
+              <p>Your resume drafts, cloud saves, import/export tools, and PDF actions are available after authentication.</p>
+            </div>
+            {notice ? <p className="auth-notice">{notice}</p> : null}
+            <AccountPanel
+              user={user}
+              mode={authMode}
+              form={authForm}
+              onModeChange={setAuthMode}
+              onFormChange={(field, value) => setAuthForm((current) => ({ ...current, [field]: value }))}
+              onSubmit={submitAuth}
+              onLogout={logout}
+              loading={cloudLoading}
+            />
+          </section>
+
+          <section className="guest-preview" aria-label="Sample resume preview">
+            <div className="guest-preview-head no-print">
+            <div>
+              <div className="field-label">Sample resume</div>
+              <strong>Preview only</strong>
+            </div>
+          </div>
+            <ResumePreview resume={sampleResume} settings={settings} />
+          </section>
+        </main>
+      </div>
+    );
+  }
+
   return (
-    <div className="App relative min-h-screen text-[var(--text)]">
-      {/* HERO */}
-      <header className="relative overflow-hidden bg-grid bg-grain" data-testid="hero-section">
-        <div className="absolute inset-0 glow pointer-events-none" />
-        <Nav />
-        <div className="relative max-w-6xl mx-auto px-6 pt-20 pb-28">
-          <div className="grid lg:grid-cols-12 gap-10 items-center">
-            <div className="lg:col-span-8 fade-in-up">
-              <div className="section-label mb-6" data-testid="hero-tag">
-                <Terminal size={14} /> ~ /home/abhisek &nbsp; • &nbsp; senior devops engineer
-              </div>
-              <h1 className="font-display text-5xl md:text-7xl font-extrabold leading-[1.02] tracking-tight">
-                Abhisek<br />
-                <span className="text-white/90">Mondal.</span>
-                <span className="text-[var(--accent)]">_</span>
-              </h1>
-              <p className="mt-6 max-w-2xl text-lg md:text-xl text-[var(--text-soft)] leading-relaxed">
-                I build and run scalable cloud platforms — automating CI/CD, hardening Kubernetes,
-                and turning infrastructure into code on <span className="text-[var(--accent)]">Azure</span> &
-                <span className="text-[var(--accent)]"> AWS</span>.
-              </p>
-              <div className="mt-4 flex flex-wrap gap-2 text-sm text-[var(--text-mute)] font-mono">
-                <span>{profile.totalExperience}</span>
-                <span>·</span>
-                <span>{profile.location}</span>
-              </div>
-              <div className="mt-10 flex flex-wrap items-center gap-3">
-                <Link to="/resume" className="btn btn-primary" data-testid="view-resume-btn">
-                  View Resume <ArrowRight size={16} />
-                </Link>
-                <a
-                  href={`mailto:${profile.email}`}
-                  className="btn btn-ghost"
-                  data-testid="contact-btn"
-                >
-                  <Mail size={14} /> Get in touch
-                </a>
-                <a
-                  href={profile.linkedin}
-                  target="_blank" rel="noreferrer"
-                  className="btn btn-ghost"
-                  data-testid="linkedin-btn"
-                >
-                  <Linkedin size={14} /> LinkedIn
-                </a>
-              </div>
-            </div>
-
-            <div className="lg:col-span-4 fade-in-up delay-2">
-              <TerminalCard />
-            </div>
+    <div className="builder-app min-h-screen bg-[var(--bg)] text-[var(--text)]">
+      <header className="builder-topbar no-print">
+        <div className="topbar-copy">
+          <div className="section-label">
+            <LayoutTemplate size={14} /> Resume Builder
           </div>
-
-          {/* Stats */}
-          <div className="mt-20 grid grid-cols-2 md:grid-cols-4 gap-px bg-[var(--border)] rounded-xl overflow-hidden border border-[var(--border)]" data-testid="stats-grid">
-            {stats.map((s, i) => (
-              <div key={s.label} className={`bg-[var(--bg-2)] px-6 py-7 fade-in-up delay-${i+1}`} data-testid={`stat-${i}`}>
-                <div className="font-display text-4xl md:text-5xl font-bold text-white">{s.value}</div>
-                <div className="mt-2 font-mono text-xs text-[var(--text-mute)] uppercase tracking-wider">{s.label}</div>
-              </div>
-            ))}
+          <h1 className="font-display text-3xl md:text-5xl font-extrabold mt-3">
+            Create a polished resume in minutes.
+          </h1>
+          <p>
+            Start from a neutral sample, edit each section with focused fields, then save to cloud,
+            export JSON, or print a clean PDF.
+          </p>
+          <div className="product-highlights">
+            <span>Live preview</span>
+            <span>Local autosave</span>
+            <span>Cloud library</span>
+            <span>PDF export</span>
           </div>
+        </div>
+        <div className="topbar-actions">
+          <StatusPill label={saveState} />
+          <CloudStatus status={apiStatus} loading={cloudLoading} message={apiMessage} />
+          <button className="btn btn-ghost" onClick={exportJson}>
+            <FileJson size={14} /> Export
+          </button>
+          <button className="btn btn-ghost" onClick={loadLatestFromCloud} disabled={cloudLoading}>
+            <Cloud size={14} /> Load Latest
+          </button>
+          <button className="btn btn-ghost" onClick={saveAsNewCloudResume} disabled={cloudLoading}>
+            <Copy size={14} /> Save Copy
+          </button>
+          <button className="btn btn-ghost" onClick={saveToCloud} disabled={cloudLoading}>
+            <Cloud size={14} /> Cloud Save
+          </button>
+          <button className="btn btn-primary" onClick={() => window.print()}>
+            <Printer size={14} /> PDF
+          </button>
+          <input
+            ref={fileInputRef}
+            className="hidden"
+            type="file"
+            accept=".json,.txt,.pdf,.docx,application/json,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            onChange={importResume}
+          />
         </div>
       </header>
 
-      {/* ABOUT */}
-      <section className="max-w-6xl mx-auto px-6 py-24" id="about" data-testid="about-section">
-        <div className="grid lg:grid-cols-12 gap-10">
-          <div className="lg:col-span-4">
-            <div className="section-label">About</div>
-            <h2 className="font-display text-3xl md:text-4xl font-bold mt-4 leading-tight">
-              Reliability through<br />automation.
-            </h2>
+      <main className="builder-layout">
+        <aside className="builder-panel no-print">
+          <div className="builder-score">
+            <div>
+              <span className="font-mono text-xs text-[var(--text-mute)]">Profile readiness</span>
+              <strong>{completion}%</strong>
+            </div>
+            <div className="score-track">
+              <span style={{ width: `${completion}%` }} />
+            </div>
+            <p>Use the checklist below to spot missing details before exporting.</p>
           </div>
-          <div className="lg:col-span-8">
-            <p className="text-[var(--text-soft)] text-lg leading-relaxed">{summary}</p>
-            <div className="mt-10 grid sm:grid-cols-2 gap-3">
-              {focusAreas.map((area, i) => {
-                const Icon = focusIcons[i % focusIcons.length];
-                return (
-                  <div
-                    key={area}
-                    className="flex items-center gap-3 p-4 rounded-lg border border-[var(--border)] bg-[var(--surface)] hover:border-[var(--accent)] transition-colors"
-                    data-testid={`focus-${i}`}
-                  >
-                    <span className="flex-shrink-0 w-9 h-9 rounded-md bg-[var(--bg-2)] grid place-items-center text-[var(--accent)]">
-                      <Icon size={16} />
-                    </span>
-                    <span className="text-sm">{area}</span>
-                  </div>
-                );
-              })}
+
+          <StartPanel
+            onBlank={clearResume}
+            onSample={resetToSample}
+            onImport={() => fileInputRef.current?.click()}
+            importing={cloudLoading}
+          />
+
+          <div className="editor-intro">
+            <div className="field-label">Edit resume details</div>
+            <p>Select a section below and fill in the fields. The preview updates instantly.</p>
+          </div>
+
+          <nav className="builder-tabs">
+            {tabs.map((tab) => {
+              const Icon = tab.icon;
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  className={activeTab === tab.id ? "active" : ""}
+                  onClick={() => setActiveTab(tab.id)}
+                >
+                  <Icon size={16} />
+                  {tab.label}
+                </button>
+              );
+            })}
+          </nav>
+
+          <div className="builder-editor">
+            {activeTab === "profile" && <ProfileForm profile={resume.profile} updateProfile={updateProfile} />}
+            {activeTab === "summary" && (
+              <SummaryForm summary={resume.summary} updateRoot={updateRoot} />
+            )}
+            {activeTab === "experience" && (
+              <ExperienceForm
+                items={resume.experience}
+                addItem={() => addItem("experience", emptyResume.experience[0])}
+                removeItem={(index) => removeItem("experience", index)}
+                updateItem={(index, field, value) => updateCollection("experience", index, field, value)}
+                updateBullet={(itemIndex, bulletIndex, value) =>
+                  updateBullet("experience", itemIndex, bulletIndex, value)
+                }
+                addBullet={(index) => addBullet("experience", index)}
+                removeBullet={(itemIndex, bulletIndex) => removeBullet("experience", itemIndex, bulletIndex)}
+              />
+            )}
+            {activeTab === "skills" && (
+              <SkillsForm
+                groups={resume.skills}
+                updateGroup={(index, field, value) => updateCollection("skills", index, field, value)}
+                updateSkill={updateSkill}
+                addGroup={() => addItem("skills", { label: "Skill Group", items: [""] })}
+                removeGroup={(index) => removeItem("skills", index)}
+                addSkill={addSkill}
+                removeSkill={removeSkill}
+              />
+            )}
+            {activeTab === "projects" && (
+              <ProjectForm
+                items={resume.projects}
+                addItem={() => addItem("projects", emptyResume.projects[0])}
+                removeItem={(index) => removeItem("projects", index)}
+                updateItem={(index, field, value) => updateCollection("projects", index, field, value)}
+                updateBullet={(itemIndex, bulletIndex, value) => updateBullet("projects", itemIndex, bulletIndex, value)}
+                addBullet={(index) => addBullet("projects", index)}
+                removeBullet={(itemIndex, bulletIndex) => removeBullet("projects", itemIndex, bulletIndex)}
+              />
+            )}
+            {activeTab === "education" && (
+              <EducationForm
+                items={resume.education}
+                addItem={() => addItem("education", emptyResume.education[0])}
+                removeItem={(index) => removeItem("education", index)}
+                updateItem={(index, field, value) => updateCollection("education", index, field, value)}
+              />
+            )}
+            {activeTab === "certifications" && (
+              <CertificationForm
+                items={resume.certifications}
+                addItem={() => addItem("certifications", emptyResume.certifications[0])}
+                removeItem={(index) => removeItem("certifications", index)}
+                updateItem={(index, field, value) => updateCollection("certifications", index, field, value)}
+              />
+            )}
+          </div>
+
+          {(notice || issues.length > 0) && (
+            <div className="builder-insights">
+              {notice ? <p>{notice}</p> : null}
+              {issues.length > 0 ? (
+                <ul>
+                  {issues.map((issue) => (
+                    <li key={issue}>{issue}</li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
+          )}
+
+          <div className="section-visibility">
+            <div className="field-label">Visible sections</div>
+            <div>
+              {sectionToggles.map((section) => (
+                <label key={section.id} className="toggle-chip">
+                  <input
+                    type="checkbox"
+                    checked={resume.sections?.[section.id] !== false}
+                    onChange={(event) => updateSectionVisibility(section.id, event.target.checked)}
+                  />
+                  <span>{section.label}</span>
+                </label>
+              ))}
             </div>
           </div>
-        </div>
-      </section>
 
-      <div className="divider max-w-6xl mx-auto" />
+          <ResumeLibrary
+            resumes={cloudResumes}
+            activeId={resumeId}
+            clientId={clientId}
+            user={user}
+            loading={cloudLoading}
+            apiStatus={apiStatus}
+            apiMessage={apiMessage}
+            onCheckCloud={() => checkCloudStatus()}
+            onRefresh={() => refreshCloudResumes()}
+            onLoad={loadCloudResume}
+            onDelete={deleteCloudResume}
+          />
 
-      {/* SKILLS */}
-      <section className="max-w-6xl mx-auto px-6 py-24" id="skills" data-testid="skills-section">
-        <div className="flex items-end justify-between flex-wrap gap-4 mb-10">
-          <div>
-            <div className="section-label">Stack</div>
-            <h2 className="font-display text-3xl md:text-4xl font-bold mt-4">Tools of the trade</h2>
-          </div>
-          <div className="font-mono text-xs text-[var(--text-mute)]">// curated, not exhaustive</div>
-        </div>
-        <div className="grid md:grid-cols-2 gap-5">
-          {skillGroups.map((group, i) => (
-            <div
-              key={group.label}
-              className="p-6 rounded-xl border border-[var(--border)] bg-[var(--surface)] hover:bg-[var(--surface-2)] transition-colors"
-              data-testid={`skill-group-${i}`}
-            >
-              <div className="flex items-center gap-2 mb-4">
-                <span className="font-mono text-xs text-[var(--accent)]">0{i+1}</span>
-                <h3 className="font-display text-lg font-semibold">{group.label}</h3>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {group.items.map((it) => (
-                  <span key={it} className="chip">{it}</span>
-                ))}
-              </div>
+          <AccountPanel
+            user={user}
+            mode={authMode}
+            form={authForm}
+            onModeChange={setAuthMode}
+            onFormChange={(field, value) => setAuthForm((current) => ({ ...current, [field]: value }))}
+            onSubmit={submitAuth}
+            onLogout={logout}
+            loading={cloudLoading}
+          />
+        </aside>
+
+        <section className="preview-stage">
+          <div className="preview-toolbar no-print">
+            <div className="template-controls">
+              <SelectField
+                label="Template"
+                value={settings.template}
+                onChange={(value) => setSettings((current) => ({ ...current, template: value }))}
+                options={[
+                  { value: "modern", label: "Modern" },
+                  { value: "classic", label: "Classic" },
+                  { value: "compact", label: "Compact" },
+                ]}
+              />
+              <SelectField
+                label="Density"
+                value={settings.density}
+                onChange={(value) => setSettings((current) => ({ ...current, density: value }))}
+                options={[
+                  { value: "comfortable", label: "Comfortable" },
+                  { value: "compact", label: "Compact" },
+                ]}
+              />
+              <label className="color-field">
+                <span>Accent</span>
+                <input
+                  type="color"
+                  value={settings.accent}
+                  onChange={(event) => setSettings((current) => ({ ...current, accent: event.target.value }))}
+                />
+              </label>
             </div>
-          ))}
-        </div>
-      </section>
-
-      <div className="divider max-w-6xl mx-auto" />
-
-      {/* EXPERIENCE */}
-      <section className="max-w-6xl mx-auto px-6 py-24" id="experience" data-testid="experience-section">
-        <div className="section-label">Experience</div>
-        <h2 className="font-display text-3xl md:text-4xl font-bold mt-4 mb-12">A record of shipping.</h2>
-        <div className="relative">
-          <div className="absolute left-[5px] top-2 bottom-2 w-px bg-[var(--border-2)]" />
-          {experience.map((exp, i) => (
-            <article key={`${exp.company}-${i}`} className="relative pl-10 pb-12 last:pb-0" data-testid={`exp-${i}`}>
-              <div className="absolute left-0 top-2 timeline-dot" />
-              <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-                <h3 className="font-display text-xl md:text-2xl font-bold">{exp.role}</h3>
-                <span className="text-[var(--accent)] font-mono text-sm">@ {exp.company}</span>
-              </div>
-              <div className="mt-1 font-mono text-xs text-[var(--text-mute)] flex flex-wrap gap-x-3">
-                <span>{exp.start} — {exp.end}</span>
-                <span>·</span>
-                <span>{exp.duration}</span>
-                <span>·</span>
-                <span>{exp.location}</span>
-                <span>·</span>
-                <span>{exp.type}</span>
-              </div>
-              <ul className="mt-5 space-y-2.5 text-[var(--text-soft)] leading-relaxed">
-                {exp.bullets.map((b, idx) => (
-                  <li key={idx} className="flex gap-3">
-                    <span className="text-[var(--accent)] mt-1.5 flex-shrink-0">▸</span>
-                    <span>{b}</span>
-                  </li>
-                ))}
-              </ul>
-              <div className="mt-5 flex flex-wrap gap-2">
-                {exp.stack.map((t) => <span key={t} className="chip">{t}</span>)}
-              </div>
-            </article>
-          ))}
-        </div>
-      </section>
-
-      <div className="divider max-w-6xl mx-auto" />
-
-      {/* CERTS + EDU */}
-      <section className="max-w-6xl mx-auto px-6 py-24 grid lg:grid-cols-2 gap-10">
-        <div data-testid="certs-section">
-            <div className="section-label">Certifications</div>
-            <div className="flex items-center justify-between gap-4 flex-wrap mt-4 mb-8">
-              <h2 className="font-display text-3xl font-bold">Validated, in writing.</h2>
-              <Link to="/certifications" className="btn btn-ghost text-xs" data-testid="certification-path-btn">
-                Certification Path <ArrowRight size={12} />
-              </Link>
-            </div>
-          <div className="space-y-3">
-            {certifications.map((c, i) => (
-              <div key={c.name} className="p-5 rounded-xl border border-[var(--border)] bg-[var(--surface)] flex items-start gap-4 hover:border-[var(--accent)] transition-colors" data-testid={`cert-${i}`}>
-                <span className="flex-shrink-0 w-10 h-10 rounded-md bg-[var(--bg-2)] grid place-items-center text-[var(--amber)]">
-                  <Award size={18} />
-                </span>
-                <div>
-                  <div className="font-medium">{c.name}</div>
-                  <div className="font-mono text-xs text-[var(--text-mute)] mt-1">
-                    {[c.issuer, c.code, c.level].filter(Boolean).join(" · ")}
-                  </div>
-                </div>
-              </div>
-            ))}
+            <span className="font-mono text-xs text-[var(--text-mute)]">
+              Use PDF to print or save as PDF.
+            </span>
           </div>
-        </div>
-        <div data-testid="edu-section">
-          <div className="section-label">Education</div>
-          <h2 className="font-display text-3xl font-bold mt-4 mb-8">Foundations.</h2>
-          <div className="space-y-3">
-            {education.map((e, i) => (
-              <div key={e.degree} className="p-5 rounded-xl border border-[var(--border)] bg-[var(--surface)]" data-testid={`edu-${i}`}>
-                <div className="flex items-baseline justify-between gap-3 flex-wrap">
-                  <div className="font-medium">{e.degree}</div>
-                  <span className="font-mono text-xs text-[var(--accent)]">{e.year}</span>
-                </div>
-                <div className="font-mono text-xs text-[var(--text-mute)] mt-1">{e.institute}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
 
-      <div className="divider max-w-6xl mx-auto" />
-
-      {/* CONTACT */}
-      <section className="max-w-6xl mx-auto px-6 py-24" id="contact" data-testid="contact-section">
-        <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-10 md:p-14 relative overflow-hidden">
-          <div className="absolute inset-0 bg-grid opacity-40 pointer-events-none" />
-          <div className="absolute -top-24 -right-24 w-72 h-72 rounded-full bg-[var(--accent)] opacity-10 blur-3xl" />
-          <div className="relative">
-            <div className="section-label"><Sparkles size={14} /> Let's connect</div>
-            <h2 className="font-display text-4xl md:text-5xl font-bold mt-4 leading-tight">
-              Hiring for SRE, Cloud,<br />or Platform Engineering?
-            </h2>
-            <p className="mt-5 max-w-xl text-[var(--text-soft)] text-lg">
-              Open to <span className="text-[var(--accent)]">Senior DevOps</span>, SRE, Cloud Engineer & Platform roles. On-site or hybrid in Kolkata, or remote.
-            </p>
-            <div className="mt-8 flex flex-wrap gap-3">
-              <a href={`mailto:${profile.email}`} className="btn btn-primary" data-testid="email-cta">
-                <Mail size={14} /> {profile.email}
-              </a>
-              <a href={`tel:${profile.phone.replace(/\s/g, '')}`} className="btn btn-ghost" data-testid="phone-cta">
-                <Phone size={14} /> {profile.phone}
-              </a>
-              <a href={profile.linkedin} target="_blank" rel="noreferrer" className="btn btn-ghost" data-testid="linkedin-cta">
-                <Linkedin size={14} /> LinkedIn <ExternalLink size={12} />
-              </a>
-              <Link to="/resume" className="btn btn-ghost" data-testid="resume-cta">
-                <Download size={14} /> Download Resume
-              </Link>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* FOOTER */}
-      <footer className="border-t border-[var(--border)] py-8" data-testid="footer">
-        <div className="max-w-6xl mx-auto px-6 flex flex-wrap justify-between items-center gap-3 font-mono text-xs text-[var(--text-mute)]">
-          <span>© {new Date().getFullYear()} Abhisek Mondal. Crafted with care.</span>
-          <span>uptime: 99.99% · last deploy: now</span>
-        </div>
-      </footer>
+          <ResumePreview resume={resume} settings={settings} />
+        </section>
+      </main>
     </div>
   );
 };
 
-const Nav = () => (
-  <nav className="relative max-w-6xl mx-auto px-6 pt-7 flex items-center justify-between" data-testid="navbar">
-    <Link to="/" className="flex items-center gap-2 group" data-testid="logo">
-      <span className="w-8 h-8 rounded-md bg-[var(--accent)] text-[#06121a] grid place-items-center font-mono font-bold text-sm">AM</span>
-      <span className="font-display font-bold text-lg group-hover:text-[var(--accent)] transition-colors">abhisek.dev</span>
-    </Link>
-    <div className="hidden md:flex items-center gap-7 font-mono text-sm text-[var(--text-soft)]">
-      <a href="#about" className="link-underline hover:text-[var(--accent)] transition-colors" data-testid="nav-about">about</a>
-      <a href="#skills" className="link-underline hover:text-[var(--accent)] transition-colors" data-testid="nav-skills">stack</a>
-      <a href="#experience" className="link-underline hover:text-[var(--accent)] transition-colors" data-testid="nav-experience">experience</a>
-      <Link to="/certifications" className="link-underline hover:text-[var(--accent)] transition-colors" data-testid="nav-certifications">certifications</Link>
-      <a href="#contact" className="link-underline hover:text-[var(--accent)] transition-colors" data-testid="nav-contact">contact</a>
-    </div>
-    <Link to="/resume" className="btn btn-ghost text-xs" data-testid="nav-resume">
-      Resume <ArrowRight size={12} />
-    </Link>
-  </nav>
+const CloudStatus = ({ status, loading, message }) => (
+  <span className={`cloud-status ${status}`}>
+    <Cloud size={13} /> {loading ? "Working..." : message}
+  </span>
 );
 
-const TerminalCard = () => (
-  <div className="rounded-xl border border-[var(--border-2)] bg-[var(--bg-2)] shadow-2xl overflow-hidden" data-testid="terminal-card">
-    <div className="flex items-center gap-2 px-4 py-3 border-b border-[var(--border)] bg-[var(--surface)]">
-      <span className="w-2.5 h-2.5 rounded-full bg-[#ef4444]" />
-      <span className="w-2.5 h-2.5 rounded-full bg-[#f59e0b]" />
-      <span className="w-2.5 h-2.5 rounded-full bg-[#22c55e]" />
-      <span className="ml-3 font-mono text-xs text-[var(--text-mute)]">~ abhisek@prod-cluster</span>
-    </div>
-    <div className="p-5 font-mono text-[13px] leading-relaxed">
-      <div><span className="text-[var(--accent)]">$</span> <span className="text-[var(--text-soft)]">whoami</span></div>
-      <div className="text-[var(--green)] mt-1">abhisek-mondal · devops-engineer</div>
-      <div className="mt-3"><span className="text-[var(--accent)]">$</span> <span className="text-[var(--text-soft)]">kubectl get expertise</span></div>
-      <div className="mt-1 text-[var(--text-soft)]">
-        <div>NAME              STATUS    AGE</div>
-        <div>azure-pipelines   <span className="text-[var(--green)]">Running</span>   3y</div>
-        <div>aws-infra         <span className="text-[var(--green)]">Running</span>   3y</div>
-        <div>kubernetes        <span className="text-[var(--green)]">Running</span>   3y</div>
-        <div>terraform-iac     <span className="text-[var(--green)]">Running</span>   3y</div>
+const ResumeLibrary = ({
+  resumes,
+  activeId,
+  clientId,
+  user,
+  loading,
+  apiStatus,
+  apiMessage,
+  onCheckCloud,
+  onRefresh,
+  onLoad,
+  onDelete,
+}) => (
+  <section className="resume-library no-print">
+    <div className="resume-library-head">
+      <div>
+        <div className="field-label">Database resumes</div>
+        <strong>{loading ? "Refreshing..." : `${resumes.length} saved`}</strong>
+        <small>{user ? user.email : `Workspace ${clientId.slice(0, 8)}`}</small>
       </div>
-      <div className="mt-3"><span className="text-[var(--accent)]">$</span> <span className="text-[var(--text-soft)]">echo $STATUS</span></div>
-      <div className="mt-1 text-[var(--amber)]">→ open to new opportunities ✱</div>
-      <div className="mt-3 flex items-center gap-1"><span className="text-[var(--accent)]">$</span> <span className="w-2 h-4 bg-[var(--accent)] inline-block animate-pulse" /></div>
+      <button type="button" className="inline-action" onClick={apiStatus === "offline" ? onCheckCloud : onRefresh} disabled={loading}>
+        <RefreshCcw size={14} /> Refresh
+      </button>
     </div>
-  </div>
+    <p className={`cloud-message ${apiStatus}`}>{apiMessage}</p>
+
+    {resumes.length ? (
+      <div className="resume-library-list">
+        {resumes.map((item) => (
+          <article key={item.id} className={item.id === activeId ? "active" : ""}>
+            <button type="button" className="resume-library-main" onClick={() => onLoad(item.id)} disabled={loading}>
+              <span>{item.title}</span>
+              <small>{formatDate(item.updated_at)}</small>
+            </button>
+            <button type="button" className="resume-library-delete" onClick={() => onDelete(item.id)} aria-label="Delete resume" disabled={loading}>
+              <Trash2 size={14} />
+            </button>
+          </article>
+        ))}
+      </div>
+    ) : (
+      <p className="resume-library-empty">No database resumes yet. Use Cloud Save to create one.</p>
+    )}
+  </section>
 );
+
+const AccountPanel = ({ user, mode, form, onModeChange, onFormChange, onSubmit, onLogout, loading }) => (
+  <section className="account-panel no-print">
+    <div className="field-label">Account</div>
+    {user ? (
+      <div className="account-card">
+        <strong>{user.name || user.email}</strong>
+        <span>{user.email}</span>
+        <button type="button" className="inline-action" onClick={onLogout} disabled={loading}>
+          Sign out
+        </button>
+      </div>
+    ) : (
+      <form onSubmit={onSubmit} className="account-form">
+        <div className="auth-mode">
+          <button type="button" className={mode === "login" ? "active" : ""} onClick={() => onModeChange("login")}>
+            Login
+          </button>
+          <button type="button" className={mode === "register" ? "active" : ""} onClick={() => onModeChange("register")}>
+            Register
+          </button>
+        </div>
+        {mode === "register" ? (
+          <input value={form.name} placeholder="Name" onChange={(event) => onFormChange("name", event.target.value)} />
+        ) : null}
+        <input value={form.email} type="email" placeholder="Email" onChange={(event) => onFormChange("email", event.target.value)} />
+        <input
+          value={form.password}
+          type="password"
+          placeholder="Password"
+          onChange={(event) => onFormChange("password", event.target.value)}
+        />
+        <button type="submit" className="inline-action" disabled={loading}>
+          {mode === "login" ? "Sign in" : "Create account"}
+        </button>
+      </form>
+    )}
+  </section>
+);
+
+const StartPanel = ({ onBlank, onSample, onImport, importing }) => (
+  <section className="start-panel no-print">
+    <div>
+      <div className="field-label">Quick start</div>
+      <h2>Choose how you want to begin</h2>
+      <p>Use the sample to understand the structure, start clean, or import an existing Word, PDF, text, or JSON resume.</p>
+    </div>
+    <div className="start-actions">
+      <button type="button" onClick={onBlank}>
+        <Plus size={14} />
+        <span>
+          <strong>Blank resume</strong>
+          <small>Start with empty fields</small>
+        </span>
+      </button>
+      <button type="button" onClick={onSample}>
+        <RefreshCcw size={14} />
+        <span>
+          <strong>Sample resume</strong>
+          <small>Load realistic demo content</small>
+        </span>
+      </button>
+      <button type="button" onClick={onImport} disabled={importing}>
+        <Upload size={14} />
+        <span>
+          <strong>Import resume</strong>
+          <small>DOCX, PDF, TXT, or JSON</small>
+        </span>
+      </button>
+    </div>
+  </section>
+);
+
+function formatDate(value) {
+  if (!value) return "Not saved";
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
+}
 
 export default Home;

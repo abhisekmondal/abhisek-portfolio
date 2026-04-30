@@ -1,0 +1,32 @@
+services:
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        REACT_APP_API_URL: ${REACT_APP_API_URL:?Set REACT_APP_API_URL to the public API URL}
+    ports:
+      - "${WEB_PORT:-8080}:8080"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    environment:
+      NODE_ENV: production
+      API_PORT: 4000
+      CORS_ORIGIN: ${CORS_ORIGIN:?Set CORS_ORIGIN to your deployed frontend origin}
+      TRUST_PROXY: "true"
+      JSON_LIMIT: ${JSON_LIMIT:-512kb}
+      RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-300}
+      IMPORT_FILE_LIMIT_BYTES: ${IMPORT_FILE_LIMIT_BYTES:-6291456}
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL for your production PostgreSQL database}
+      PGSSLMODE: ${PGSSLMODE:-require}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET before starting Docker Compose}
+    ports:
+      - "${API_PORT:-4000}:4000"
+    restart: unless-stopped
