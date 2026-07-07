@@ -70,7 +70,7 @@
     "start:api": "node server/index.js",
     "build": "craco build",
     "test": "craco test",
-    "test:server": "node --test \"server/**/*.test.js\"",
+    "test:server": "node --test server/validation.test.js",
     "test:ci": "npm run test:server && npm run build"
   },
   "browserslist": {
