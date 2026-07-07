@@ -70,7 +70,9 @@ export const resumeSchema = z.object({
 });
 
 export const settingsSchema = z.object({
-  template: z.enum(["modern", "classic", "compact"]).catch(builderSettings.template),
+  template: z
+    .enum(["modern", "classic", "compact", "ats", "tech", "executive", "graduate", "creative"])
+    .catch(builderSettings.template),
   accent: z.string().regex(/^#[0-9a-fA-F]{6}$/).catch(builderSettings.accent),
   density: z.enum(["comfortable", "compact"]).catch(builderSettings.density),
 });

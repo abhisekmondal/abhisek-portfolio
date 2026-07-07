@@ -48,6 +48,7 @@
     "mammoth": "^1.12.0",
     "multer": "^2.1.1",
     "next-themes": "^0.4.6",
+    "nodemailer": "^8.0.7",
     "pdf-parse": "^2.4.5",
     "pg": "^8.20.0",
     "react": "^19.0.0",
@@ -68,7 +69,9 @@
     "start": "craco start",
     "start:api": "node server/index.js",
     "build": "craco build",
-    "test": "craco test"
+    "test": "craco test",
+    "test:server": "node --test \"server/**/*.test.js\"",
+    "test:ci": "npm run test:server && npm run build"
   },
   "browserslist": {
     "production": [

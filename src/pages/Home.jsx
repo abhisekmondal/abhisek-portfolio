@@ -51,12 +51,16 @@ import {
   logoutUser,
   loadLatestResumeFromApi,
   registerUser,
+  requestPasswordReset,
+  resetPassword,
   saveResumeToApi,
+  verifyEmail,
 } from "@/lib/resumeApi";
 
 const STORAGE_KEY = "resume-builder-draft-v2";
 const SETTINGS_KEY = "resume-builder-settings-v1";
 const RESUME_ID_KEY = "resume-builder-current-id-v1";
+const PDF_TITLE_SUFFIX = "resume";
 
 const tabs = [
   { id: "profile", label: "Profile", icon: UserRound },
@@ -77,6 +81,17 @@ const sectionToggles = [
   { id: "certifications", label: "Certs" },
 ];
 
+const templateOptions = [
+  { id: "ats", label: "ATS", tone: "Minimal" },
+  { id: "modern", label: "Modern", tone: "Balanced" },
+  { id: "tech", label: "Tech", tone: "Structured" },
+  { id: "executive", label: "Executive", tone: "Classic" },
+  { id: "graduate", label: "Graduate", tone: "Compact" },
+  { id: "creative", label: "Creative", tone: "Accent" },
+  { id: "classic", label: "Classic", tone: "Serif" },
+  { id: "compact", label: "Compact", tone: "Dense" },
+];
+
 const Home = () => {
   const fileInputRef = useRef(null);
   const [activeTab, setActiveTab] = useState("profile");
@@ -86,7 +101,7 @@ const Home = () => {
   const [clientId] = useState(() => getClientId());
   const [user, setUser] = useState(() => getStoredUser());
   const [authMode, setAuthMode] = useState("login");
-  const [authForm, setAuthForm] = useState({ name: "", email: "", password: "" });
+  const [authForm, setAuthForm] = useState({ name: "", email: "", password: "", resetToken: "" });
   const [cloudResumes, setCloudResumes] = useState([]);
   const [cloudLoading, setCloudLoading] = useState(false);
   const [apiStatus, setApiStatus] = useState("checking");
@@ -115,6 +130,39 @@ const Home = () => {
     checkCloudStatus({ quiet: true }).then((online) => {
       if (online) refreshCloudResumes({ quiet: true });
     });
+  }, []);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const resetToken = params.get("resetToken");
+    const verifyToken = params.get("verifyToken");
+
+    if (verifyToken) {
+      setNotice("Verifying your email...");
+      verifyEmail({ token: verifyToken })
+        .then((result) => {
+          setAuthMode("login");
+          if (result.email) {
+            setAuthForm((current) => ({ ...current, email: result.email, password: "", resetToken: "" }));
+          }
+          setNotice(result.message || "Your email is verified. Sign in to open your workspace.");
+        })
+        .catch((error) => {
+          setAuthMode("login");
+          setNotice(error.message);
+        })
+        .finally(() => {
+          window.history.replaceState({}, document.title, window.location.pathname);
+        });
+      return;
+    }
+
+    if (!resetToken) return;
+
+    setAuthMode("reset");
+    setAuthForm((current) => ({ ...current, resetToken }));
+    setNotice("Enter a new password to finish resetting your account.");
+    window.history.replaceState({}, document.title, window.location.pathname);
   }, []);
 
   const checkCloudStatus = async ({ quiet = false } = {}) => {
@@ -276,6 +324,43 @@ const Home = () => {
     link.download = `${resume.profile.name || "resume"}-builder-data.json`;
     link.click();
     URL.revokeObjectURL(url);
+  };
+
+  const exportPdf = async () => {
+    const originalTitle = document.title;
+    const fileBase = getExportFileName(resume);
+
+    try {
+      setNotice("Preparing PDF export...");
+      document.title = fileBase;
+      document.body.dataset.pdfExport = "true";
+
+      if (document.fonts?.ready) {
+        await document.fonts.ready;
+      }
+
+      window.setTimeout(() => {
+        window.print();
+      }, 80);
+    } catch (error) {
+      setNotice(`PDF export failed: ${error.message}`);
+      document.title = originalTitle;
+      delete document.body.dataset.pdfExport;
+      return;
+    }
+
+    let cleanedUp = false;
+    const cleanup = () => {
+      if (cleanedUp) return;
+      cleanedUp = true;
+      document.title = originalTitle;
+      delete document.body.dataset.pdfExport;
+      window.removeEventListener("afterprint", cleanup);
+      setNotice(`PDF export ready: ${fileBase}.pdf`);
+    };
+
+    window.addEventListener("afterprint", cleanup);
+    window.setTimeout(cleanup, 3000);
   };
 
   const importResume = async (event) => {
@@ -443,13 +528,54 @@ const Home = () => {
   const submitAuth = async (event) => {
     event.preventDefault();
     try {
-      setNotice(authMode === "login" ? "Signing in..." : "Creating account...");
+      const actionCopy = {
+        login: "Signing in...",
+        register: "Creating account...",
+        forgot: "Preparing reset instructions...",
+        reset: "Resetting password...",
+      };
+      setNotice(actionCopy[authMode] || "Working...");
       setCloudLoading(true);
-      const result = authMode === "login" ? await loginUser(authForm) : await registerUser(authForm);
+
+      if (authMode === "forgot") {
+        const result = await requestPasswordReset({ email: authForm.email });
+        setApiStatus("online");
+        setApiMessage("Cloud storage online");
+        setAuthForm((current) => ({ ...current, resetToken: result.resetToken || "" }));
+        setAuthMode("reset");
+        setNotice(
+          result.resetToken
+            ? `Reset token generated for local testing. Paste or keep the token and set a new password.`
+            : result.message,
+        );
+        return;
+      }
+
+      if (authMode === "reset") {
+        const result = await resetPassword({ token: authForm.resetToken, password: authForm.password });
+        setApiStatus("online");
+        setApiMessage("Cloud storage online");
+        setAuthForm({ name: "", email: authForm.email, password: "", resetToken: "" });
+        setAuthMode("login");
+        setNotice(result.message);
+        return;
+      }
+
+      if (authMode === "register") {
+        const result = await registerUser(authForm);
+        setApiStatus("online");
+        setApiMessage("Cloud storage online");
+        setAuthMode("login");
+        setAuthForm({ name: "", email: authForm.email, password: "", resetToken: "" });
+        setNotice(result.message || "Check your email to verify your account.");
+        return;
+      }
+
+      const result = await loginUser(authForm);
       setApiStatus("online");
       setApiMessage("Cloud storage online");
       setUser(result.user);
-      setAuthForm({ name: "", email: "", password: "" });
+      setAuthForm({ name: "", email: "", password: "", resetToken: "" });
       setNotice(
         result.claimed
           ? `Signed in as ${result.user.email}. Moved ${result.claimed} workspace resume${result.claimed === 1 ? "" : "s"} into this account.`
@@ -492,8 +618,8 @@ const Home = () => {
               Build a polished resume with live preview.
             </h1>
             <p>
-              Preview the builder with sample data. Create an account or sign in to unlock editing,
-              cloud storage, imports, exports, and PDF tools.
+              Preview the builder with sample data. Create an account, verify your email,
+              then sign in to unlock editing, cloud storage, imports, exports, and PDF tools.
             </p>
             <div className="product-highlights">
               <span>Sample preview</span>
@@ -507,8 +633,8 @@ const Home = () => {
           <section className="guest-auth no-print">
             <div>
               <div className="field-label">Private workspace</div>
-              <h2>Sign in to start building</h2>
-              <p>Your resume drafts, cloud saves, import/export tools, and PDF actions are available after authentication.</p>
+              <h2>Create an account first</h2>
+              <p>Create your account and verify your email before signing in. After verification, your private workspace is ready.</p>
             </div>
             {notice ? <p className="auth-notice">{notice}</p> : null}
             <AccountPanel
@@ -573,8 +699,8 @@ const Home = () => {
           <button className="btn btn-ghost" onClick={saveToCloud} disabled={cloudLoading}>
             <Cloud size={14} /> Cloud Save
           </button>
-          <button className="btn btn-primary" onClick={() => window.print()}>
-            <Printer size={14} /> PDF
+          <button className="btn btn-primary" onClick={exportPdf}>
+            <Printer size={14} /> Export PDF
           </button>
           <input
             ref={fileInputRef}
@@ -748,11 +874,7 @@ const Home = () => {
                 label="Template"
                 value={settings.template}
                 onChange={(value) => setSettings((current) => ({ ...current, template: value }))}
-                options={[
-                  { value: "modern", label: "Modern" },
-                  { value: "classic", label: "Classic" },
-                  { value: "compact", label: "Compact" },
-                ]}
+                options={templateOptions.map((option) => ({ value: option.id, label: option.label }))}
               />
               <SelectField
                 label="Density"
@@ -773,7 +895,7 @@ const Home = () => {
               </label>
             </div>
             <span className="font-mono text-xs text-[var(--text-mute)]">
-              Use PDF to print or save as PDF.
+              A4 export with fixed margins and print-safe page breaks.
             </span>
           </div>
 
@@ -860,16 +982,40 @@ const AccountPanel = ({ user, mode, form, onModeChange, onFormChange, onSubmit, 
         {mode === "register" ? (
           <input value={form.name} placeholder="Name" onChange={(event) => onFormChange("name", event.target.value)} />
         ) : null}
-        <input value={form.email} type="email" placeholder="Email" onChange={(event) => onFormChange("email", event.target.value)} />
-        <input
-          value={form.password}
-          type="password"
-          placeholder="Password"
-          onChange={(event) => onFormChange("password", event.target.value)}
-        />
+        {mode !== "reset" ? (
+          <input value={form.email} type="email" placeholder="Email" onChange={(event) => onFormChange("email", event.target.value)} />
+        ) : null}
+        {mode === "reset" ? (
+          <input
+            value={form.resetToken}
+            placeholder="Reset token"
+            onChange={(event) => onFormChange("resetToken", event.target.value)}
+          />
+        ) : null}
+        {mode !== "forgot" ? (
+          <input
+            value={form.password}
+            type="password"
+            placeholder={mode === "reset" ? "New password" : "Password"}
+            onChange={(event) => onFormChange("password", event.target.value)}
+          />
+        ) : null}
         <button type="submit" className="inline-action" disabled={loading}>
-          {mode === "login" ? "Sign in" : "Create account"}
+          {mode === "login" && "Sign in"}
+          {mode === "register" && "Create account"}
+          {mode === "forgot" && "Send reset"}
+          {mode === "reset" && "Reset password"}
         </button>
+        {mode === "login" ? (
+          <button type="button" className="text-action" onClick={() => onModeChange("forgot")}>
+            Forgot password?
+          </button>
+        ) : null}
+        {mode === "forgot" || mode === "reset" ? (
+          <button type="button" className="text-action" onClick={() => onModeChange("login")}>
+            Back to login
+          </button>
+        ) : null}
       </form>
     )}
   </section>
@@ -916,6 +1062,17 @@ function formatDate(value) {
     hour: "2-digit",
     minute: "2-digit",
   }).format(new Date(value));
+}
+
+function getExportFileName(resume) {
+  const base = [resume.profile?.name, PDF_TITLE_SUFFIX]
+    .filter(Boolean)
+    .join("-")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/(^-|-$)/g, "");
+
+  return base || PDF_TITLE_SUFFIX;
 }
 
 export default Home;

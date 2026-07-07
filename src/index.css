@@ -325,10 +325,19 @@ html, body {
 .topbar-actions,
 .template-controls {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+.topbar-actions {
   justify-content: flex-end;
+}
+
+.template-controls {
+  flex: 1 1 0;
+  min-width: 0;
+  justify-content: flex-start;
 }
 
 .status-pill {
@@ -631,6 +640,18 @@ button:disabled,
 .account-form input:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 4px rgba(34, 211, 238, 0.1);
+}
+
+.text-action {
+  width: max-content;
+  color: var(--text-mute);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.7rem;
+  text-align: left;
+}
+
+.text-action:hover {
+  color: var(--accent);
 }
 
 .start-panel {
@@ -997,6 +1018,13 @@ button:disabled,
   margin-bottom: 18px;
 }
 
+.preview-toolbar > span {
+  flex: 0 0 auto;
+  max-width: 260px;
+  text-align: right;
+  line-height: 1.45;
+}
+
 .select-field div {
   position: relative;
 }
@@ -1026,14 +1054,14 @@ button:disabled,
 }
 
 .resume-preview {
-  width: min(100%, 920px);
-  min-height: 1188px;
+  width: min(100%, 210mm);
+  min-height: 297mm;
   margin: 0 auto;
   background: #fff;
   color: #172033;
   border-radius: 12px;
   box-shadow: 0 28px 90px rgba(0, 0, 0, 0.36);
-  padding: 54px 58px;
+  padding: 16mm;
   font-family: 'Manrope', Arial, sans-serif;
 }
 
@@ -1043,7 +1071,7 @@ button:disabled,
 }
 
 .resume-preview.compact {
-  padding: 42px 50px;
+  padding: 13mm 15mm;
 }
 
 .resume-preview.classic {
@@ -1051,9 +1079,154 @@ button:disabled,
   color: #111827;
 }
 
-.resume-preview.modern .resume-header {
+.resume-preview.modern .resume-header,
+.resume-preview.tech .resume-header,
+.resume-preview.creative .resume-header {
   border-left: 6px solid var(--resume-accent);
   padding-left: 18px;
+}
+
+.resume-preview.ats {
+  color: #111827;
+  font-family: Arial, Helvetica, sans-serif;
+  padding: 15mm;
+}
+
+.resume-preview.ats .resume-header {
+  display: block;
+  border-bottom: 1px solid #111827;
+  padding-bottom: 12px;
+}
+
+.resume-preview.ats .resume-header h2 {
+  font-family: Arial, Helvetica, sans-serif;
+  font-size: 2.2rem;
+  text-transform: uppercase;
+}
+
+.resume-preview.ats .resume-header p,
+.resume-preview.ats .preview-section h3 {
+  color: #111827;
+}
+
+.resume-preview.ats .resume-contact {
+  align-items: flex-start;
+  flex-direction: row;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  text-align: left;
+}
+
+.resume-preview.ats .preview-section h3 {
+  border-bottom-color: #111827;
+  letter-spacing: 0.08em;
+}
+
+.resume-preview.tech {
+  --tech-muted: #475569;
+  background:
+    linear-gradient(90deg, rgba(15, 118, 110, 0.08), transparent 34%),
+    #fff;
+}
+
+.resume-preview.tech .resume-header {
+  border-bottom-color: #99f6e4;
+}
+
+.resume-preview.tech .preview-skills div {
+  padding: 7px 9px;
+  border-left: 3px solid var(--resume-accent);
+  background: #f8fafc;
+}
+
+.resume-preview.tech .record-heading h4 {
+  letter-spacing: 0;
+}
+
+.resume-preview.executive {
+  color: #292524;
+  background: #fffdf8;
+  font-family: Georgia, 'Times New Roman', serif;
+}
+
+.resume-preview.executive .resume-header {
+  display: block;
+  text-align: center;
+  border-bottom: 3px double #a16207;
+}
+
+.resume-preview.executive .resume-header h2 {
+  color: #292524;
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 2.55rem;
+}
+
+.resume-preview.executive .resume-header p,
+.resume-preview.executive .preview-section h3 {
+  color: #92400e;
+}
+
+.resume-preview.executive .resume-contact {
+  align-items: center;
+  flex-direction: row;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-top: 12px;
+  text-align: center;
+}
+
+.resume-preview.graduate {
+  padding: 14mm 15mm;
+}
+
+.resume-preview.graduate .resume-header {
+  display: block;
+}
+
+.resume-preview.graduate .resume-contact {
+  align-items: flex-start;
+  flex-direction: row;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  text-align: left;
+}
+
+.resume-preview.graduate .preview-two-col {
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+
+.resume-preview.graduate .preview-section {
+  margin-top: 18px;
+}
+
+.resume-preview.creative {
+  background:
+    linear-gradient(180deg, rgba(244, 114, 182, 0.1), transparent 22%),
+    #fff;
+}
+
+.resume-preview.creative .resume-header {
+  border-bottom: 0;
+  padding-bottom: 10px;
+}
+
+.resume-preview.creative .resume-header h2 {
+  font-size: 3rem;
+}
+
+.resume-preview.creative .preview-section h3 {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.resume-preview.creative .preview-section h3::after {
+  content: "";
+  display: block;
+  width: 52px;
+  height: 3px;
+  margin-top: 6px;
+  background: var(--resume-accent);
 }
 
 .resume-header {
@@ -1198,6 +1371,20 @@ button:disabled,
   overflow-wrap: anywhere;
 }
 
+.preview-section,
+.preview-record,
+.mini-record,
+.preview-skills div {
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+
+.preview-section h3,
+.record-heading {
+  break-after: avoid;
+  page-break-after: avoid;
+}
+
 @media (max-width: 1180px) {
   .builder-topbar {
     align-items: flex-start;
@@ -1261,6 +1448,15 @@ button:disabled,
     align-items: stretch;
   }
 
+  .preview-toolbar > span {
+    max-width: none;
+    text-align: left;
+  }
+
+  .template-controls {
+    justify-content: stretch;
+  }
+
   .resume-contact {
     align-items: flex-start;
     text-align: left;
@@ -1277,12 +1473,24 @@ button:disabled,
 }
 
 @media print {
+  @page {
+    size: A4;
+    margin: 12mm;
+  }
+
+  html,
   body {
     background: #fff !important;
+    width: auto !important;
+    min-width: 0 !important;
+    color: #111827 !important;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
   }
 
   .builder-app {
     background: #fff !important;
+    min-height: auto !important;
   }
 
   .preview-stage {
@@ -1299,21 +1507,99 @@ button:disabled,
     margin: 0 !important;
   }
 
+  body[data-pdf-export="true"] .preview-stage {
+    min-height: auto !important;
+  }
+
   .resume-preview {
-    width: auto !important;
+    width: 100% !important;
     min-height: auto !important;
     margin: 0 !important;
     border-radius: 0 !important;
     box-shadow: none !important;
     padding: 0 !important;
     color: #111827 !important;
+    font-size: 9.5pt !important;
+    line-height: 1.42 !important;
+    overflow: visible !important;
   }
 
   .resume-header h2 {
     font-size: 24pt !important;
+    line-height: 1.05 !important;
+  }
+
+  .resume-header {
+    padding-bottom: 11pt !important;
+    gap: 14pt !important;
+  }
+
+  .resume-contact,
+  .record-heading p,
+  .record-heading time {
+    font-size: 8.2pt !important;
   }
 
   .preview-section {
+    margin-top: 12pt !important;
+    break-inside: auto;
+    page-break-inside: auto;
+  }
+
+  .preview-section h3 {
+    margin-bottom: 6pt !important;
+    padding-bottom: 3pt !important;
+    font-size: 8.3pt !important;
+  }
+
+  .preview-section p,
+  .preview-section li,
+  .preview-skills,
+  .mini-record {
+    font-size: 9pt !important;
+    line-height: 1.42 !important;
+  }
+
+  .preview-records {
+    gap: 10pt !important;
+  }
+
+  .preview-record,
+  .mini-record,
+  .preview-skills div {
     break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .record-heading h4 {
+    font-size: 9.5pt !important;
+  }
+
+  .preview-record ul {
+    margin-top: 4pt !important;
+  }
+
+  .preview-record li {
+    margin-top: 2pt !important;
+  }
+
+  .preview-two-col {
+    gap: 16pt !important;
+  }
+
+  .resume-contact span,
+  .mini-record,
+  .preview-record,
+  .preview-skills span {
+    overflow-wrap: anywhere;
+  }
+
+  a,
+  span,
+  p,
+  li,
+  em {
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
   }
 }

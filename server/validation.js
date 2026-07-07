@@ -82,6 +82,31 @@ function validateAuthPayload(body) {
   return { email, password, name };
 }
 
+function validatePasswordResetRequest(body) {
+  const email = String(body?.email || "").trim().toLowerCase();
+
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throwBadRequest("A valid email is required.");
+  }
+
+  return { email };
+}
+
+function validatePasswordResetPayload(body) {
+  const token = String(body?.token || "").trim();
+  const password = String(body?.password || "");
+
+  if (!/^[a-f0-9]{64}$/i.test(token)) {
+    throwBadRequest("A valid reset token is required.");
+  }
+
+  if (password.length < 8 || password.length > 120) {
+    throwBadRequest("Password must be 8 to 120 characters.");
+  }
+
+  return { token, password };
+}
+
 function validateUuid(value, label = "id") {
   const id = String(value || "").trim();
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)) {
@@ -98,6 +123,8 @@ function throwBadRequest(message) {
 
 module.exports = {
   validateAuthPayload,
+  validatePasswordResetPayload,
+  validatePasswordResetRequest,
   validateResumePayload,
   validateUuid,
 };

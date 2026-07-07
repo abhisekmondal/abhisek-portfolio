@@ -7,13 +7,24 @@ const express = require("express");
 const jwt = require("jsonwebtoken");
 const mammoth = require("mammoth");
 const multer = require("multer");
+const nodemailer = require("nodemailer");
 const { PDFParse } = require("pdf-parse");
 const { initDatabase, pool } = require("./db");
-const { validateAuthPayload, validateResumePayload, validateUuid } = require("./validation");
+const {
+  validateAuthPayload,
+  validatePasswordResetPayload,
+  validatePasswordResetRequest,
+  validateResumePayload,
+  validateUuid,
+} = require("./validation");
 
 const app = express();
 const port = Number(process.env.API_PORT || 4000);
 const jwtSecret = process.env.JWT_SECRET || "dev-only-change-me";
+const resetTokenTtlMinutes = Number(process.env.PASSWORD_RESET_TOKEN_MINUTES || 30);
+const verificationTokenTtlMinutes = Number(process.env.EMAIL_VERIFICATION_TOKEN_MINUTES || 60 * 24);
+const appUrl = String(process.env.APP_URL || process.env.CORS_ORIGIN?.split(",")[0] || "http://localhost:3000").trim();
+const mailFrom = process.env.MAIL_FROM || "Resume Builder <no-reply@example.com>";
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: Number(process.env.IMPORT_FILE_LIMIT_BYTES || 6 * 1024 * 1024) },
@@ -58,11 +69,28 @@ app.get("/api/health", async (req, res) => {
 app.post("/api/auth/register", async (req, res, next) => {
   try {
     const { email, password, name } = validateAuthPayload(req.body);
-    const clientId = getClientId(req, false);
-    const existing = await pool.query("SELECT id FROM users WHERE LOWER(email) = LOWER($1)", [email]);
+    const existing = await pool.query("SELECT id, email, password_hash, name, email_verified_at FROM users WHERE LOWER(email) = LOWER($1)", [email]);
 
     if (existing.rowCount) {
-      res.status(409).json({ error: "An account already exists for this email." });
+      const existingUser = existing.rows[0];
+      if (!existingUser.email_verified_at && (await bcrypt.compare(password, existingUser.password_hash))) {
+        const verificationToken = await createEmailVerificationToken(existingUser.id);
+        await sendAccountVerificationEmail({
+          to: existingUser.email,
+          name: existingUser.name,
+          verifyUrl: buildEmailVerificationUrl(verificationToken),
+          expiresInMinutes: verificationTokenTtlMinutes,
+        });
+
+        res.json({
+          ok: true,
+          message: "Account already exists but is not verified. Check your email for a new verification link.",
+          emailSent: true,
+        });
+        return;
+      }
+
+      res.status(409).json({ error: "An account already exists for this email. Sign in or reset your password." });
       return;
     }
 
@@ -75,8 +103,20 @@ app.post("/api/auth/register", async (req, res, next) => {
       [id, email, passwordHash, name || null],
     );
 
-    const claimed = await claimAnonymousResumes(id, clientId);
-    res.status(201).json({ user: result.rows[0], token: signToken(result.rows[0]), claimed });
+    const user = result.rows[0];
+    const verificationToken = await createEmailVerificationToken(user.id);
+    await sendAccountVerificationEmail({
+      to: user.email,
+      name: user.name,
+      verifyUrl: buildEmailVerificationUrl(verificationToken),
+      expiresInMinutes: verificationTokenTtlMinutes,
+    });
+
+    res.status(201).json({
+      ok: true,
+      message: "Account created. Check your email to verify your account.",
+      emailSent: true,
+    });
   } catch (error) {
     next(error);
   }
@@ -86,18 +126,187 @@ app.post("/api/auth/login", async (req, res, next) => {
   try {
     const { email, password } = validateAuthPayload(req.body);
     const clientId = getClientId(req, false);
-    const result = await pool.query("SELECT id, email, password_hash, name, created_at FROM users WHERE LOWER(email) = LOWER($1)", [
-      email,
-    ]);
+    const result = await pool.query(
+      `SELECT users.id,
+              users.email,
+              users.password_hash,
+              users.name,
+              users.email_verified_at,
+              users.created_at,
+              EXISTS (
+                SELECT 1
+                FROM email_verification_tokens evt
+                WHERE evt.user_id = users.id
+                  AND evt.used_at IS NULL
+                  AND evt.expires_at > NOW()
+              ) AS has_pending_verification
+       FROM users
+       WHERE LOWER(users.email) = LOWER($1)`,
+      [email],
+    );
 
     if (!result.rowCount || !(await bcrypt.compare(password, result.rows[0].password_hash))) {
       res.status(401).json({ error: "Invalid email or password." });
       return;
     }
 
-    const { password_hash, ...user } = result.rows[0];
+    const { password_hash, has_pending_verification, ...user } = result.rows[0];
+    if (!user.email_verified_at || has_pending_verification) {
+      res.status(403).json({ error: "Verify your email before signing in." });
+      return;
+    }
+
     const claimed = await claimAnonymousResumes(user.id, clientId);
     res.json({ user, token: signToken(user), claimed });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/auth/verify-email", async (req, res, next) => {
+  try {
+    const token = readHexToken(req.body?.token, "verification token");
+    const tokenHash = hashToken(token);
+    const tokenResult = await pool.query(
+      `SELECT evt.id, evt.user_id, users.email, users.name, users.email_verified_at
+       FROM email_verification_tokens evt
+       JOIN users ON users.id = evt.user_id
+       WHERE evt.token_hash = $1
+         AND evt.used_at IS NULL
+         AND evt.expires_at > NOW()`,
+      [tokenHash],
+    );
+
+    if (!tokenResult.rowCount) {
+      res.status(400).json({ error: "Verification link is invalid or expired." });
+      return;
+    }
+
+    const record = tokenResult.rows[0];
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        `UPDATE users
+         SET email_verified_at = COALESCE(email_verified_at, NOW()),
+             updated_at = NOW()
+         WHERE id = $1`,
+        [record.user_id],
+      );
+      await client.query("UPDATE email_verification_tokens SET used_at = NOW() WHERE id = $1", [record.id]);
+      await client.query(
+        "UPDATE email_verification_tokens SET used_at = NOW() WHERE user_id = $1 AND used_at IS NULL",
+        [record.user_id],
+      );
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    const onboardingEmailSent = await sendOnboardingEmail({ to: record.email, name: record.name }).catch((error) => {
+      console.warn(`[${req.requestId}] Failed to send onboarding email to ${record.email}: ${error.message}`);
+      return false;
+    });
+
+    res.json({
+      ok: true,
+      message: "Your email is verified. Sign in to open your workspace.",
+      email: record.email,
+      onboardingEmailSent,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/auth/forgot-password", async (req, res, next) => {
+  try {
+    const { email } = validatePasswordResetRequest(req.body);
+    const genericMessage = "If an account exists for that email, a password reset link has been prepared.";
+    const userResult = await pool.query("SELECT id, email FROM users WHERE LOWER(email) = LOWER($1)", [email]);
+
+    if (!userResult.rowCount) {
+      res.json({ ok: true, message: genericMessage });
+      return;
+    }
+
+    const resetToken = crypto.randomBytes(32).toString("hex");
+    const tokenHash = hashToken(resetToken);
+    const expiresAt = new Date(Date.now() + resetTokenTtlMinutes * 60 * 1000);
+
+    await pool.query(
+      `INSERT INTO password_reset_tokens (id, user_id, token_hash, expires_at)
+       VALUES ($1, $2, $3, $4)`,
+      [crypto.randomUUID(), userResult.rows[0].id, tokenHash, expiresAt],
+    );
+
+    const resetUrl = buildPasswordResetUrl(resetToken);
+    const emailSent = await sendPasswordResetEmail({
+      to: userResult.rows[0].email,
+      resetUrl,
+      expiresInMinutes: resetTokenTtlMinutes,
+    });
+
+    const response = {
+      ok: true,
+      message: genericMessage,
+      emailSent,
+      expiresInMinutes: resetTokenTtlMinutes,
+    };
+
+    if (shouldExposeResetToken()) {
+      response.resetToken = resetToken;
+    }
+
+    res.json(response);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/auth/reset-password", async (req, res, next) => {
+  try {
+    const { token, password } = validatePasswordResetPayload(req.body);
+    const tokenHash = hashToken(token);
+    const tokenResult = await pool.query(
+      `SELECT id, user_id
+       FROM password_reset_tokens
+       WHERE token_hash = $1
+         AND used_at IS NULL
+         AND expires_at > NOW()`,
+      [tokenHash],
+    );
+
+    if (!tokenResult.rowCount) {
+      res.status(400).json({ error: "Reset token is invalid or expired." });
+      return;
+    }
+
+    const passwordHash = await bcrypt.hash(password, 12);
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2", [
+        passwordHash,
+        tokenResult.rows[0].user_id,
+      ]);
+      await client.query("UPDATE password_reset_tokens SET used_at = NOW() WHERE id = $1", [tokenResult.rows[0].id]);
+      await client.query(
+        "UPDATE password_reset_tokens SET used_at = NOW() WHERE user_id = $1 AND used_at IS NULL",
+        [tokenResult.rows[0].user_id],
+      );
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    res.json({ ok: true, message: "Password has been reset. Sign in with your new password." });
   } catch (error) {
     next(error);
   }
@@ -309,6 +518,206 @@ function requireAuth(req, res, next) {
 
 function signToken(user) {
   return jwt.sign({ id: user.id, email: user.email, name: user.name || "" }, jwtSecret, { expiresIn: "7d" });
+}
+
+function hashToken(token) {
+  return crypto.createHash("sha256").update(token).digest("hex");
+}
+
+async function createEmailVerificationToken(userId) {
+  const verificationToken = crypto.randomBytes(32).toString("hex");
+  const expiresAt = new Date(Date.now() + verificationTokenTtlMinutes * 60 * 1000);
+
+  await pool.query(
+    `INSERT INTO email_verification_tokens (id, user_id, token_hash, expires_at)
+     VALUES ($1, $2, $3, $4)`,
+    [crypto.randomUUID(), userId, hashToken(verificationToken), expiresAt],
+  );
+
+  return verificationToken;
+}
+
+function readHexToken(value, label) {
+  const token = String(value || "").trim();
+  if (!/^[a-f0-9]{64}$/i.test(token)) {
+    const error = new Error(`A valid ${label} is required.`);
+    error.statusCode = 400;
+    throw error;
+  }
+  return token;
+}
+
+function shouldExposeResetToken() {
+  return process.env.NODE_ENV !== "production" || process.env.PASSWORD_RESET_EXPOSE_TOKEN === "true";
+}
+
+function buildPasswordResetUrl(token) {
+  const url = new URL(appUrl || "http://localhost:3000");
+  url.searchParams.set("auth", "reset");
+  url.searchParams.set("resetToken", token);
+  return url.toString();
+}
+
+function buildEmailVerificationUrl(token) {
+  const url = new URL(appUrl || "http://localhost:3000");
+  url.searchParams.set("auth", "verify");
+  url.searchParams.set("verifyToken", token);
+  return url.toString();
+}
+
+function hasSmtpConfig() {
+  return Boolean(process.env.SMTP_HOST && process.env.SMTP_PORT);
+}
+
+async function sendPasswordResetEmail({ to, resetUrl, expiresInMinutes }) {
+  if (!hasSmtpConfig()) {
+    if (process.env.NODE_ENV === "production" && !shouldExposeResetToken()) {
+      throw Object.assign(new Error("Password reset email is not configured."), { statusCode: 503 });
+    }
+    console.info(`Password reset link for ${to}: ${resetUrl}`);
+    return false;
+  }
+
+  const transporter = createMailTransporter();
+  await transporter.sendMail({
+    from: mailFrom,
+    to,
+    subject: "Reset your Resume Builder password",
+    text: [
+      "Use the link below to reset your Resume Builder password.",
+      "",
+      resetUrl,
+      "",
+      `This link expires in ${expiresInMinutes} minutes.`,
+      "If you did not request this, you can ignore this email.",
+    ].join("\n"),
+    html: `
+      <div style="font-family: Arial, sans-serif; line-height: 1.5; color: #111827;">
+        <h2>Reset your Resume Builder password</h2>
+        <p>Use the button below to set a new password.</p>
+        <p>
+          <a href="${escapeHtml(resetUrl)}" style="display: inline-block; padding: 10px 14px; background: #0891b2; color: #ffffff; text-decoration: none; border-radius: 6px;">
+            Reset password
+          </a>
+        </p>
+        <p>This link expires in ${expiresInMinutes} minutes.</p>
+        <p>If you did not request this, you can ignore this email.</p>
+      </div>
+    `,
+  });
+
+  return true;
+}
+
+async function sendAccountVerificationEmail({ to, name, verifyUrl, expiresInMinutes }) {
+  if (!hasSmtpConfig()) {
+    const error = new Error("Account verification email is not configured.");
+    error.statusCode = 503;
+    throw error;
+  }
+
+  const displayName = name || "there";
+  const hours = Math.max(1, Math.round(expiresInMinutes / 60));
+  const transporter = createMailTransporter();
+
+  await transporter.sendMail({
+    from: mailFrom,
+    to,
+    subject: "Activate your Resume Builder workspace",
+    text: [
+      `Hi ${displayName},`,
+      "",
+      "Your Resume Builder account has been created.",
+      "Use the link below to verify your email and activate your workspace.",
+      "",
+      verifyUrl,
+      "",
+      `This verification link expires in about ${hours} hour${hours === 1 ? "" : "s"}.`,
+      "If you did not create this account, you can ignore this email.",
+    ].join("\n"),
+    html: `
+      <div style="font-family: Arial, sans-serif; line-height: 1.55; color: #111827; max-width: 560px;">
+        <h2 style="margin: 0 0 12px;">Activate your Resume Builder workspace</h2>
+        <p>Hi ${escapeHtml(displayName)},</p>
+        <p>Your account has been created. Verify your email to activate your workspace and start building resumes.</p>
+        <p>
+          <a href="${escapeHtml(verifyUrl)}" style="display: inline-block; padding: 10px 14px; background: #0891b2; color: #ffffff; text-decoration: none; border-radius: 6px;">
+            Activate workspace
+          </a>
+        </p>
+        <p>This verification link expires in about ${hours} hour${hours === 1 ? "" : "s"}.</p>
+        <p style="color: #64748b; font-size: 13px;">If you did not create this account, you can ignore this email.</p>
+      </div>
+    `,
+  });
+
+  return true;
+}
+
+async function sendOnboardingEmail({ to, name }) {
+  if (!hasSmtpConfig()) {
+    console.info(`Onboarding email skipped for ${to}: SMTP is not configured.`);
+    return false;
+  }
+
+  const displayName = name || "there";
+  const url = appUrl || "http://localhost:3000";
+
+  const transporter = createMailTransporter();
+  await transporter.sendMail({
+    from: mailFrom,
+    to,
+    subject: "Welcome to Resume Builder",
+    text: [
+      `Hi ${displayName},`,
+      "",
+      "Welcome to Resume Builder. Your workspace is ready.",
+      "",
+      "You can now import an existing resume, edit sections with live preview, save drafts to cloud storage, and export a clean PDF.",
+      "",
+      `Open your workspace: ${url}`,
+      "",
+      "Thanks,",
+      "Resume Builder",
+    ].join("\n"),
+    html: `
+      <div style="font-family: Arial, sans-serif; line-height: 1.55; color: #111827; max-width: 560px;">
+        <h2 style="margin: 0 0 12px;">Welcome to Resume Builder</h2>
+        <p>Hi ${escapeHtml(displayName)},</p>
+        <p>Your workspace is ready. You can import an existing resume, edit it with live preview, save drafts to cloud storage, and export a clean PDF.</p>
+        <p>
+          <a href="${escapeHtml(url)}" style="display: inline-block; padding: 10px 14px; background: #0891b2; color: #ffffff; text-decoration: none; border-radius: 6px;">
+            Open Resume Builder
+          </a>
+        </p>
+        <p style="color: #64748b; font-size: 13px;">If you did not create this account, you can ignore this email.</p>
+      </div>
+    `,
+  });
+
+  return true;
+}
+
+function createMailTransporter() {
+  return nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+    port: Number(process.env.SMTP_PORT),
+    secure: process.env.SMTP_SECURE === "true",
+    auth: process.env.SMTP_USER
+      ? {
+          user: process.env.SMTP_USER,
+          pass: process.env.SMTP_PASS || "",
+        }
+      : undefined,
+  });
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
 function getResumeTitle(data) {

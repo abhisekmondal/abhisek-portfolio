@@ -76,7 +76,6 @@ export async function registerUser(payload) {
     body: JSON.stringify(payload),
   });
   const result = await readApiResponse(response);
-  storeSession(result);
   return result;
 }
 
@@ -89,6 +88,36 @@ export async function loginUser(payload) {
   const result = await readApiResponse(response);
   storeSession(result);
   return result;
+}
+
+export async function requestPasswordReset(payload) {
+  const response = await fetch(`${API_BASE}/api/auth/forgot-password`, {
+    method: "POST",
+    headers: apiHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(payload),
+  });
+
+  return readApiResponse(response);
+}
+
+export async function resetPassword(payload) {
+  const response = await fetch(`${API_BASE}/api/auth/reset-password`, {
+    method: "POST",
+    headers: apiHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(payload),
+  });
+
+  return readApiResponse(response);
+}
+
+export async function verifyEmail(payload) {
+  const response = await fetch(`${API_BASE}/api/auth/verify-email`, {
+    method: "POST",
+    headers: apiHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(payload),
+  });
+
+  return readApiResponse(response);
 }
 
 export function logoutUser() {
@@ -128,6 +157,7 @@ function apiHeaders(headers = {}) {
 }
 
 function storeSession(result) {
+  if (!result.token || !result.user) return;
   localStorage.setItem(AUTH_TOKEN_KEY, result.token);
   localStorage.setItem(AUTH_USER_KEY, JSON.stringify(result.user));
 }

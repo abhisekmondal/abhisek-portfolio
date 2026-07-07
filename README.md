@@ -13,6 +13,7 @@ A full-page React resume builder with editable sections, live preview, local aut
 - Resume library for loading, copying, and deleting saved database resumes
 - Anonymous browser workspace IDs so database resumes are scoped per browser
 - Email/password accounts with JWT-authenticated resume libraries
+- Forgot-password flow with expiring reset tokens
 - Import/export resume data as JSON
 - Print dialog export for saving as PDF
 - Neutral fictional sample resume for first-run onboarding
@@ -25,6 +26,7 @@ A full-page React resume builder with editable sections, live preview, local aut
 - CRA + Craco
 - Tailwind CSS
 - Lucide Icons
+- Nodemailer SMTP email
 
 ## Run Locally
 
@@ -48,6 +50,13 @@ PGUSER=postgres
 PGPASSWORD=postgres
 REACT_APP_API_URL=http://localhost:4000
 JWT_SECRET=replace-with-a-long-random-secret
+APP_URL=http://localhost:3000
+MAIL_FROM="Resume Builder <no-reply@example.com>"
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_SECURE=false
+SMTP_USER=
+SMTP_PASS=
 JSON_LIMIT=512kb
 RATE_LIMIT_MAX=300
 TRUST_PROXY=false
@@ -75,6 +84,8 @@ Users can also create an account from the sidebar. When signed in, database resu
 
 When a user signs in or registers, resumes saved under that browser workspace are automatically claimed into the account.
 
+The forgot-password API stores hashed reset tokens with an expiry and sends reset links through SMTP when mail settings are configured. In local development, the API can expose the raw reset token for testing by setting `PASSWORD_RESET_EXPOSE_TOKEN=true`; keep this disabled in production. Phone/SMS reset should be added as a separate OTP-provider integration with dedicated abuse controls.
+
 ## Production Notes
 
 - Set `NODE_ENV=production` and a strong `JWT_SECRET`; the API refuses to boot with the development secret in production.
@@ -90,6 +101,15 @@ npm run build
 ```
 
 The static build is written to `./build`.
+
+## Tests
+
+```bash
+npm run test:server
+npm run test:ci
+```
+
+`test:server` runs the API validation tests with Node's built-in test runner. `test:ci` runs the server tests and a production frontend build.
 
 ## Deployment
 
@@ -115,6 +135,13 @@ DATABASE_URL=postgresql://user:password@db-host:5432/database
 PGSSLMODE=require
 CORS_ORIGIN=https://your-frontend-domain.com
 REACT_APP_API_URL=https://your-api-domain.com
+APP_URL=https://your-frontend-domain.com
+MAIL_FROM="Resume Builder <no-reply@your-domain.com>"
+SMTP_HOST=smtp.your-provider.com
+SMTP_PORT=587
+SMTP_SECURE=false
+SMTP_USER=your-smtp-user
+SMTP_PASS=your-smtp-password
 WEB_PORT=8080
 API_PORT=4000
 ```
@@ -122,6 +149,13 @@ API_PORT=4000
 Start frontend and API:
 
 ```bash
+docker compose up --build -d
+```
+
+For local Docker testing against a PostgreSQL server running on your host machine, use the Docker example env file:
+
+```bash
+cp .env.docker.example .env
 docker compose up --build -d
 ```
 
@@ -160,3 +194,47 @@ For Windows PowerShell:
 $env:REACT_APP_API_URL="https://api.your-domain.com"
 npm run build
 ```
+
+### GitHub Actions Deployment
+
+The workflow at `.github/workflows/deploy-resume-builder.yml` builds and pushes two Docker Hub images, then deploys both images to existing Azure Container Apps on pushes to `main`.
+
+Required GitHub repository secrets:
+
+```text
+DOCKER_USERNAME
+DOCKER_PASSWORD
+AZURE_CREDENTIALS
+DATABASE_URL
+JWT_SECRET
+SMTP_USER
+SMTP_PASS
+```
+
+Required GitHub repository variables:
+
+```text
+REACT_APP_API_URL
+FRONTEND_URL
+MAIL_FROM
+```
+
+These Azure deployment values are already set as workflow defaults and only need repository variables if you want to override them:
+
+```text
+AZURE_SUBSCRIPTION_ID=4583ca9d-aca6-480e-b713-d4ef447c3157
+AZURE_RESOURCE_GROUP=KUBE
+AZURE_CONTAINER_APP_ENV=resume-env
+AZURE_API_CONTAINER_APP=resume-builder-api
+AZURE_FRONTEND_CONTAINER_APP=resume-builder-frontend
+```
+
+Optional variables:
+
+```text
+SMTP_HOST
+SMTP_PORT
+SMTP_SECURE
+```
+
+`AZURE_CREDENTIALS` should be the JSON output from an Azure service principal with permission to update the Container Apps. The workflow assumes the Container Apps already exist and updates their images and runtime environment variables.
