@@ -578,8 +578,7 @@ async function sendPasswordResetEmail({ to, resetUrl, expiresInMinutes }) {
     return false;
   }
 
-  const transporter = createMailTransporter();
-  await transporter.sendMail({
+  await sendMailOrThrow({
     from: mailFrom,
     to,
     subject: "Reset your Resume Builder password",
@@ -618,9 +617,7 @@ async function sendAccountVerificationEmail({ to, name, verifyUrl, expiresInMinu
 
   const displayName = name || "there";
   const hours = Math.max(1, Math.round(expiresInMinutes / 60));
-  const transporter = createMailTransporter();
-
-  await transporter.sendMail({
+  await sendMailOrThrow({
     from: mailFrom,
     to,
     subject: "Activate your Resume Builder workspace",
@@ -663,8 +660,7 @@ async function sendOnboardingEmail({ to, name }) {
   const displayName = name || "there";
   const url = appUrl || "http://localhost:3000";
 
-  const transporter = createMailTransporter();
-  await transporter.sendMail({
+  await sendMailOrThrow({
     from: mailFrom,
     to,
     subject: "Welcome to Resume Builder",
@@ -710,6 +706,18 @@ function createMailTransporter() {
         }
       : undefined,
   });
+}
+
+async function sendMailOrThrow(message) {
+  try {
+    const transporter = createMailTransporter();
+    await transporter.sendMail(message);
+  } catch (error) {
+    const mailError = new Error("Email service is unavailable. Please try again later.");
+    mailError.statusCode = 503;
+    mailError.cause = error;
+    throw mailError;
+  }
 }
 
 function escapeHtml(value) {
