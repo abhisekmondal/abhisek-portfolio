@@ -19,7 +19,7 @@ const ResumePreview = ({ resume, settings }) => {
 
   return (
     <article
-      className={`resume-preview ${settings.template} ${settings.density}`}
+      className={`resume-preview template-${settings.template} density-${settings.density}`}
       style={{ "--resume-accent": settings.accent }}
     >
       <header className="resume-header">

@@ -39,6 +39,7 @@ import {
   parseResumeJson,
   readStoredJson,
 } from "@/lib/resumeSchema";
+import { getResumeScore } from "@/lib/resumeScore";
 import {
   checkApiHealth,
   deleteResumeFromApi,
@@ -83,14 +84,14 @@ const sectionToggles = [
 ];
 
 const templateOptions = [
-  { id: "ats", label: "ATS", tone: "Minimal" },
-  { id: "modern", label: "Modern", tone: "Balanced" },
-  { id: "tech", label: "Tech", tone: "Structured" },
-  { id: "executive", label: "Executive", tone: "Classic" },
-  { id: "graduate", label: "Graduate", tone: "Compact" },
-  { id: "creative", label: "Creative", tone: "Accent" },
-  { id: "classic", label: "Classic", tone: "Serif" },
-  { id: "compact", label: "Compact", tone: "Dense" },
+  { id: "ats", label: "ATS", tone: "Minimal", tag: "Job portals" },
+  { id: "modern", label: "Modern", tone: "Balanced", tag: "Recommended" },
+  { id: "tech", label: "Tech", tone: "Structured", tag: "Engineering" },
+  { id: "executive", label: "Executive", tone: "Classic", tag: "Leadership" },
+  { id: "graduate", label: "Graduate", tone: "Compact", tag: "Early career" },
+  { id: "creative", label: "Creative", tone: "Accent", tag: "Portfolio" },
+  { id: "classic", label: "Classic", tone: "Serif", tag: "Traditional" },
+  { id: "compact", label: "Compact", tone: "Dense", tag: "One page" },
 ];
 
 const authContent = {
@@ -154,6 +155,13 @@ const Home = () => {
 
   const completion = useMemo(() => getCompletion(resume), [resume]);
   const issues = useMemo(() => getResumeIssues(resume), [resume]);
+  const resumeScore = useMemo(() => getResumeScore(resume), [resume]);
+
+  const openScoreSuggestion = (suggestion) => {
+    if (!suggestion.target) return;
+    setActiveTab(suggestion.target);
+    setNotice(`Opened ${tabs.find((tab) => tab.id === suggestion.target)?.label || "the right"} section for: ${suggestion.text}`);
+  };
 
   useEffect(() => {
     checkCloudStatus({ quiet: true }).then((online) => {
@@ -776,16 +784,7 @@ const Home = () => {
 
       <main className="builder-layout">
         <aside className="builder-panel no-print">
-          <div className="builder-score">
-            <div>
-              <span className="font-mono text-xs text-[var(--text-mute)]">Profile readiness</span>
-              <strong>{completion}%</strong>
-            </div>
-            <div className="score-track">
-              <span style={{ width: `${completion}%` }} />
-            </div>
-            <p>Use the checklist below to spot missing details before exporting.</p>
-          </div>
+          <ResumeScoreCard score={resumeScore} completion={completion} onOpenSuggestion={openScoreSuggestion} />
 
           <StartPanel
             onBlank={clearResume}
@@ -937,29 +936,30 @@ const Home = () => {
         <section className="preview-stage">
           <div className="preview-toolbar no-print">
             <div className="template-controls">
-              <SelectField
-                label="Template"
+              <TemplatePicker
                 value={settings.template}
+                accent={settings.accent}
                 onChange={(value) => setSettings((current) => ({ ...current, template: value }))}
-                options={templateOptions.map((option) => ({ value: option.id, label: option.label }))}
               />
-              <SelectField
-                label="Density"
-                value={settings.density}
-                onChange={(value) => setSettings((current) => ({ ...current, density: value }))}
-                options={[
-                  { value: "comfortable", label: "Comfortable" },
-                  { value: "compact", label: "Compact" },
-                ]}
-              />
-              <label className="color-field">
-                <span>Accent</span>
-                <input
-                  type="color"
-                  value={settings.accent}
-                  onChange={(event) => setSettings((current) => ({ ...current, accent: event.target.value }))}
+              <div className="template-fine-controls">
+                <SelectField
+                  label="Density"
+                  value={settings.density}
+                  onChange={(value) => setSettings((current) => ({ ...current, density: value }))}
+                  options={[
+                    { value: "comfortable", label: "Comfortable" },
+                    { value: "compact", label: "Compact" },
+                  ]}
                 />
-              </label>
+                <label className="color-field">
+                  <span>Accent</span>
+                  <input
+                    type="color"
+                    value={settings.accent}
+                    onChange={(event) => setSettings((current) => ({ ...current, accent: event.target.value }))}
+                  />
+                </label>
+              </div>
             </div>
             <span className="font-mono text-xs text-[var(--text-mute)]">
               A4 export with fixed margins and print-safe page breaks.
@@ -976,6 +976,46 @@ const Home = () => {
 const CloudStatus = ({ status, loading, message }) => (
   <span className={`cloud-status ${status}`}>
     <Cloud size={13} /> {loading ? "Working..." : message}
+  </span>
+);
+
+const TemplatePicker = ({ value, accent, onChange }) => (
+  <section className="template-picker" aria-label="Resume templates">
+    <div className="template-picker-head">
+      <div>
+        <div className="field-label">Templates</div>
+        <strong>{templateOptions.find((template) => template.id === value)?.label || "Modern"}</strong>
+      </div>
+      <span>{templateOptions.length} styles</span>
+    </div>
+    <div className="template-grid">
+      {templateOptions.map((template) => (
+        <button
+          key={template.id}
+          type="button"
+          className={`template-card template-card-${template.id} ${value === template.id ? "active" : ""}`}
+          onClick={() => onChange(template.id)}
+          aria-pressed={value === template.id}
+        >
+          <TemplateSwatch template={template.id} accent={accent} />
+          <span>
+            <strong>{template.label}</strong>
+            <small>{template.tone}</small>
+          </span>
+          <em>{template.tag}</em>
+        </button>
+      ))}
+    </div>
+  </section>
+);
+
+const TemplateSwatch = ({ template, accent }) => (
+  <span className={`template-swatch swatch-${template}`} style={{ "--swatch-accent": accent }}>
+    <i className="swatch-header" />
+    <b />
+    <b />
+    <b />
+    <em />
   </span>
 );
 
@@ -1021,6 +1061,40 @@ const ResumeLibrary = ({
       </div>
     ) : (
       <p className="resume-library-empty">No database resumes yet. Use Cloud Save to create one.</p>
+    )}
+  </section>
+);
+
+const ResumeScoreCard = ({ score, completion, onOpenSuggestion }) => (
+  <section className="resume-score-card no-print">
+    <div className="score-card-head">
+      <div>
+        <div className="field-label">Resume score</div>
+        <strong>{score.score}/100</strong>
+      </div>
+      <span className={`score-grade score-${score.label.toLowerCase().replace(/\s+/g, "-")}`}>{score.label}</span>
+    </div>
+    <div className="score-track score-track-large" aria-label={`Resume score ${score.score} out of 100`}>
+      <span style={{ width: `${score.score}%` }} />
+    </div>
+    <p>{score.summary}</p>
+    <div className="score-meta">
+      <span>Completion {completion}%</span>
+      <span>{score.suggestions.length} suggested fix{score.suggestions.length === 1 ? "" : "es"}</span>
+    </div>
+    {score.suggestions.length ? (
+      <ul className="score-suggestions">
+        {score.suggestions.slice(0, 3).map((item) => (
+          <li key={item.text}>
+            <button type="button" onClick={() => onOpenSuggestion(item)}>
+              <span>{item.text}</span>
+              <small>{tabs.find((tab) => tab.id === item.target)?.label || "Open"}</small>
+            </button>
+          </li>
+        ))}
+      </ul>
+    ) : (
+      <p className="score-done">No major gaps detected.</p>
     )}
   </section>
 );
