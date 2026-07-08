@@ -152,12 +152,62 @@ app.post("/api/auth/login", async (req, res, next) => {
 
     const { password_hash, has_pending_verification, ...user } = result.rows[0];
     if (!user.email_verified_at || has_pending_verification) {
-      res.status(403).json({ error: "Verify your email before signing in." });
+      res.status(403).json({ error: "Verify your email before signing in.", code: "EMAIL_NOT_VERIFIED", email: user.email });
       return;
     }
 
     const claimed = await claimAnonymousResumes(user.id, clientId);
     res.json({ user, token: signToken(user), claimed });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/auth/resend-verification", async (req, res, next) => {
+  try {
+    const { email, password } = validateAuthPayload(req.body);
+    const result = await pool.query(
+      `SELECT users.id,
+              users.email,
+              users.password_hash,
+              users.name,
+              users.email_verified_at,
+              EXISTS (
+                SELECT 1
+                FROM email_verification_tokens evt
+                WHERE evt.user_id = users.id
+                  AND evt.used_at IS NULL
+                  AND evt.expires_at > NOW()
+              ) AS has_pending_verification
+       FROM users
+       WHERE LOWER(users.email) = LOWER($1)`,
+      [email],
+    );
+
+    if (!result.rowCount || !(await bcrypt.compare(password, result.rows[0].password_hash))) {
+      res.status(401).json({ error: "Invalid email or password." });
+      return;
+    }
+
+    const user = result.rows[0];
+    if (user.email_verified_at && !user.has_pending_verification) {
+      res.json({ ok: true, message: "Your account is already verified. Sign in to continue.", alreadyVerified: true });
+      return;
+    }
+
+    const verificationToken = await createEmailVerificationToken(user.id);
+    await sendAccountVerificationEmail({
+      to: user.email,
+      name: user.name,
+      verifyUrl: buildEmailVerificationUrl(verificationToken),
+      expiresInMinutes: verificationTokenTtlMinutes,
+    });
+
+    res.json({
+      ok: true,
+      message: "Verification email sent. Check your inbox to activate your account.",
+      emailSent: true,
+    });
   } catch (error) {
     next(error);
   }
@@ -578,11 +628,14 @@ async function sendPasswordResetEmail({ to, resetUrl, expiresInMinutes }) {
     return false;
   }
 
+  const subject = "Reset your Resume Builder password";
   await sendMailOrThrow({
     from: mailFrom,
     to,
-    subject: "Reset your Resume Builder password",
+    subject,
     text: [
+      "Resume Builder",
+      "",
       "Use the link below to reset your Resume Builder password.",
       "",
       resetUrl,
@@ -590,19 +643,17 @@ async function sendPasswordResetEmail({ to, resetUrl, expiresInMinutes }) {
       `This link expires in ${expiresInMinutes} minutes.`,
       "If you did not request this, you can ignore this email.",
     ].join("\n"),
-    html: `
-      <div style="font-family: Arial, sans-serif; line-height: 1.5; color: #111827;">
-        <h2>Reset your Resume Builder password</h2>
-        <p>Use the button below to set a new password.</p>
-        <p>
-          <a href="${escapeHtml(resetUrl)}" style="display: inline-block; padding: 10px 14px; background: #0891b2; color: #ffffff; text-decoration: none; border-radius: 6px;">
-            Reset password
-          </a>
-        </p>
-        <p>This link expires in ${expiresInMinutes} minutes.</p>
-        <p>If you did not request this, you can ignore this email.</p>
-      </div>
-    `,
+    html: buildEmailHtml({
+      eyebrow: "Password reset",
+      title: subject,
+      intro: "Use the secure link below to set a new password for your Resume Builder account.",
+      ctaLabel: "Reset password",
+      ctaUrl: resetUrl,
+      details: [
+        `This link expires in ${expiresInMinutes} minutes.`,
+        "If you did not request this, you can ignore this email.",
+      ],
+    }),
   });
 
   return true;
@@ -617,11 +668,14 @@ async function sendAccountVerificationEmail({ to, name, verifyUrl, expiresInMinu
 
   const displayName = name || "there";
   const hours = Math.max(1, Math.round(expiresInMinutes / 60));
+  const subject = "Verify your Resume Builder account";
   await sendMailOrThrow({
     from: mailFrom,
     to,
-    subject: "Activate your Resume Builder workspace",
+    subject,
     text: [
+      "Resume Builder",
+      "",
       `Hi ${displayName},`,
       "",
       "Your Resume Builder account has been created.",
@@ -632,20 +686,18 @@ async function sendAccountVerificationEmail({ to, name, verifyUrl, expiresInMinu
       `This verification link expires in about ${hours} hour${hours === 1 ? "" : "s"}.`,
       "If you did not create this account, you can ignore this email.",
     ].join("\n"),
-    html: `
-      <div style="font-family: Arial, sans-serif; line-height: 1.55; color: #111827; max-width: 560px;">
-        <h2 style="margin: 0 0 12px;">Activate your Resume Builder workspace</h2>
-        <p>Hi ${escapeHtml(displayName)},</p>
-        <p>Your account has been created. Verify your email to activate your workspace and start building resumes.</p>
-        <p>
-          <a href="${escapeHtml(verifyUrl)}" style="display: inline-block; padding: 10px 14px; background: #0891b2; color: #ffffff; text-decoration: none; border-radius: 6px;">
-            Activate workspace
-          </a>
-        </p>
-        <p>This verification link expires in about ${hours} hour${hours === 1 ? "" : "s"}.</p>
-        <p style="color: #64748b; font-size: 13px;">If you did not create this account, you can ignore this email.</p>
-      </div>
-    `,
+    html: buildEmailHtml({
+      eyebrow: "Account verification",
+      title: "Verify your email to activate your workspace",
+      greeting: `Hi ${displayName},`,
+      intro: "Your account has been created. Verify your email to activate your private workspace and start building resumes.",
+      ctaLabel: "Verify email",
+      ctaUrl: verifyUrl,
+      details: [
+        `This verification link expires in about ${hours} hour${hours === 1 ? "" : "s"}.`,
+        "If you did not create this account, you can ignore this email.",
+      ],
+    }),
   });
 
   return true;
@@ -659,12 +711,15 @@ async function sendOnboardingEmail({ to, name }) {
 
   const displayName = name || "there";
   const url = appUrl || "http://localhost:3000";
+  const subject = "Welcome to Resume Builder";
 
   await sendMailOrThrow({
     from: mailFrom,
     to,
-    subject: "Welcome to Resume Builder",
+    subject,
     text: [
+      "Resume Builder",
+      "",
       `Hi ${displayName},`,
       "",
       "Welcome to Resume Builder. Your workspace is ready.",
@@ -676,19 +731,18 @@ async function sendOnboardingEmail({ to, name }) {
       "Thanks,",
       "Resume Builder",
     ].join("\n"),
-    html: `
-      <div style="font-family: Arial, sans-serif; line-height: 1.55; color: #111827; max-width: 560px;">
-        <h2 style="margin: 0 0 12px;">Welcome to Resume Builder</h2>
-        <p>Hi ${escapeHtml(displayName)},</p>
-        <p>Your workspace is ready. You can import an existing resume, edit it with live preview, save drafts to cloud storage, and export a clean PDF.</p>
-        <p>
-          <a href="${escapeHtml(url)}" style="display: inline-block; padding: 10px 14px; background: #0891b2; color: #ffffff; text-decoration: none; border-radius: 6px;">
-            Open Resume Builder
-          </a>
-        </p>
-        <p style="color: #64748b; font-size: 13px;">If you did not create this account, you can ignore this email.</p>
-      </div>
-    `,
+    html: buildEmailHtml({
+      eyebrow: "Workspace ready",
+      title: subject,
+      greeting: `Hi ${displayName},`,
+      intro: "Your workspace is ready. You can import an existing resume, edit it with live preview, save drafts to cloud storage, and export a clean PDF.",
+      ctaLabel: "Open Resume Builder",
+      ctaUrl: url,
+      details: [
+        "A sample resume is available before sign-in, and your private tools are available inside your workspace.",
+        "If you did not create this account, you can ignore this email.",
+      ],
+    }),
   });
 
   return true;
@@ -718,6 +772,73 @@ async function sendMailOrThrow(message) {
     mailError.cause = error;
     throw mailError;
   }
+}
+
+function buildEmailHtml({ eyebrow, title, greeting, intro, ctaLabel, ctaUrl, details = [] }) {
+  const safeUrl = escapeHtml(ctaUrl);
+  const detailItems = details
+    .filter(Boolean)
+    .map((detail) => `<p style="margin: 0 0 10px; color: #64748b; font-size: 13px; line-height: 1.55;">${escapeHtml(detail)}</p>`)
+    .join("");
+  const greetingBlock = greeting
+    ? `<p style="margin: 0 0 10px; color: #334155; font-size: 15px; line-height: 1.6;">${escapeHtml(greeting)}</p>`
+    : "";
+
+  return `
+    <!doctype html>
+    <html>
+      <body style="margin: 0; padding: 0; background: #f1f5f9; font-family: Arial, Helvetica, sans-serif; color: #0f172a;">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="width: 100%; background: #f1f5f9; margin: 0; padding: 28px 12px;">
+          <tr>
+            <td align="center">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="width: 100%; max-width: 600px; border-collapse: collapse;">
+                <tr>
+                  <td style="padding: 18px 22px; background: #0f172a; border-radius: 14px 14px 0 0;">
+                    <div style="font-size: 18px; font-weight: 800; color: #ffffff; letter-spacing: 0;">Resume Builder</div>
+                    <div style="margin-top: 4px; color: #67e8f9; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;">${escapeHtml(eyebrow)}</div>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding: 28px 24px 22px; background: #ffffff; border-left: 1px solid #e2e8f0; border-right: 1px solid #e2e8f0;">
+                    <h1 style="margin: 0 0 14px; color: #0f172a; font-size: 24px; line-height: 1.2; font-weight: 800;">${escapeHtml(title)}</h1>
+                    ${greetingBlock}
+                    <p style="margin: 0 0 22px; color: #334155; font-size: 15px; line-height: 1.6;">${escapeHtml(intro)}</p>
+                    <table role="presentation" cellspacing="0" cellpadding="0" style="margin: 0 0 20px;">
+                      <tr>
+                        <td style="border-radius: 8px; background: #0891b2;">
+                          <a href="${safeUrl}" style="display: inline-block; padding: 12px 18px; color: #ffffff; font-size: 14px; font-weight: 800; text-decoration: none; border-radius: 8px;">
+                            ${escapeHtml(ctaLabel)}
+                          </a>
+                        </td>
+                      </tr>
+                    </table>
+                    <p style="margin: 0 0 14px; color: #64748b; font-size: 13px; line-height: 1.55;">
+                      If the button does not work, copy and paste this link into your browser:
+                    </p>
+                    <p style="margin: 0; word-break: break-all;">
+                      <a href="${safeUrl}" style="color: #0891b2; font-size: 13px; line-height: 1.55;">${safeUrl}</a>
+                    </p>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding: 18px 24px 8px; background: #ffffff; border-left: 1px solid #e2e8f0; border-right: 1px solid #e2e8f0;">
+                    ${detailItems}
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding: 16px 24px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 0 0 14px 14px;">
+                    <p style="margin: 0; color: #64748b; font-size: 12px; line-height: 1.5;">
+                      Resume Builder sends account and workspace emails for your security. Please do not reply to this automated message.
+                    </p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+        </table>
+      </body>
+    </html>
+  `;
 }
 
 function escapeHtml(value) {

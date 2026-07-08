@@ -51,6 +51,7 @@ import {
   logoutUser,
   loadLatestResumeFromApi,
   registerUser,
+  resendVerificationEmail,
   requestPasswordReset,
   resetPassword,
   saveResumeToApi,
@@ -92,6 +93,33 @@ const templateOptions = [
   { id: "compact", label: "Compact", tone: "Dense" },
 ];
 
+const authContent = {
+  login: {
+    eyebrow: "Private workspace",
+    title: "Sign in to continue",
+    body: "Use the account you verified to open your saved resumes, imports, exports, and cloud workspace.",
+    submit: "Sign in",
+  },
+  register: {
+    eyebrow: "Create account",
+    title: "Start with email verification",
+    body: "Create your account first. We will send a verification link before your private workspace is enabled.",
+    submit: "Create account",
+  },
+  forgot: {
+    eyebrow: "Password help",
+    title: "Reset your password",
+    body: "Enter your account email and we will send a secure password reset link.",
+    submit: "Send reset link",
+  },
+  reset: {
+    eyebrow: "New password",
+    title: "Choose a new password",
+    body: "Use the reset link from your email, then sign in with your new password.",
+    submit: "Reset password",
+  },
+};
+
 const Home = () => {
   const fileInputRef = useRef(null);
   const [activeTab, setActiveTab] = useState("profile");
@@ -102,6 +130,7 @@ const Home = () => {
   const [user, setUser] = useState(() => getStoredUser());
   const [authMode, setAuthMode] = useState("login");
   const [authForm, setAuthForm] = useState({ name: "", email: "", password: "", resetToken: "" });
+  const [verificationPendingEmail, setVerificationPendingEmail] = useState("");
   const [cloudResumes, setCloudResumes] = useState([]);
   const [cloudLoading, setCloudLoading] = useState(false);
   const [apiStatus, setApiStatus] = useState("checking");
@@ -567,6 +596,7 @@ const Home = () => {
         setApiMessage("Cloud storage online");
         setAuthMode("login");
         setAuthForm({ name: "", email: authForm.email, password: "", resetToken: "" });
+        setVerificationPendingEmail("");
         setNotice(result.message || "Check your email to verify your account.");
         return;
       }
@@ -576,6 +606,7 @@ const Home = () => {
       setApiMessage("Cloud storage online");
       setUser(result.user);
       setAuthForm({ name: "", email: "", password: "", resetToken: "" });
+      setVerificationPendingEmail("");
       setNotice(
         result.claimed
           ? `Signed in as ${result.user.email}. Moved ${result.claimed} workspace resume${result.claimed === 1 ? "" : "s"} into this account.`
@@ -585,6 +616,32 @@ const Home = () => {
     } catch (error) {
       setApiStatus("offline");
       setApiMessage("Cloud storage offline. Local autosave is active.");
+      if (authMode === "login" && error.code === "EMAIL_NOT_VERIFIED") {
+        setApiStatus("online");
+        setApiMessage("Cloud storage online");
+        setVerificationPendingEmail(error.details?.email || authForm.email);
+      }
+      setNotice(error.message);
+    } finally {
+      setCloudLoading(false);
+    }
+  };
+
+  const changeAuthMode = (mode) => {
+    setVerificationPendingEmail("");
+    setAuthMode(mode);
+  };
+
+  const resendVerification = async () => {
+    try {
+      setNotice("Sending verification email...");
+      setCloudLoading(true);
+      const result = await resendVerificationEmail({ email: authForm.email || verificationPendingEmail, password: authForm.password });
+      setApiStatus("online");
+      setApiMessage("Cloud storage online");
+      setVerificationPendingEmail(authForm.email || verificationPendingEmail);
+      setNotice(result.message);
+    } catch (error) {
       setNotice(error.message);
     } finally {
       setCloudLoading(false);
@@ -632,19 +689,24 @@ const Home = () => {
         <main className="guest-layout">
           <section className="guest-auth no-print">
             <div>
-              <div className="field-label">Private workspace</div>
-              <h2>Create an account first</h2>
-              <p>Create your account and verify your email before signing in. After verification, your private workspace is ready.</p>
+              <div className="field-label">{authContent[authMode].eyebrow}</div>
+              <h2>{authContent[authMode].title}</h2>
+              <p>{authContent[authMode].body}</p>
             </div>
             {notice ? <p className="auth-notice">{notice}</p> : null}
             <AccountPanel
               user={user}
               mode={authMode}
               form={authForm}
-              onModeChange={setAuthMode}
-              onFormChange={(field, value) => setAuthForm((current) => ({ ...current, [field]: value }))}
+              onModeChange={changeAuthMode}
+              onFormChange={(field, value) => {
+                if (field === "email") setVerificationPendingEmail("");
+                setAuthForm((current) => ({ ...current, [field]: value }));
+              }}
               onSubmit={submitAuth}
               onLogout={logout}
+              onResendVerification={resendVerification}
+              canResendVerification={authMode === "login" && Boolean(verificationPendingEmail)}
               loading={cloudLoading}
             />
           </section>
@@ -859,10 +921,15 @@ const Home = () => {
             user={user}
             mode={authMode}
             form={authForm}
-            onModeChange={setAuthMode}
-            onFormChange={(field, value) => setAuthForm((current) => ({ ...current, [field]: value }))}
+            onModeChange={changeAuthMode}
+            onFormChange={(field, value) => {
+              if (field === "email") setVerificationPendingEmail("");
+              setAuthForm((current) => ({ ...current, [field]: value }));
+            }}
             onSubmit={submitAuth}
             onLogout={logout}
+            onResendVerification={resendVerification}
+            canResendVerification={authMode === "login" && Boolean(verificationPendingEmail)}
             loading={cloudLoading}
           />
         </aside>
@@ -958,7 +1025,18 @@ const ResumeLibrary = ({
   </section>
 );
 
-const AccountPanel = ({ user, mode, form, onModeChange, onFormChange, onSubmit, onLogout, loading }) => (
+const AccountPanel = ({
+  user,
+  mode,
+  form,
+  onModeChange,
+  onFormChange,
+  onSubmit,
+  onLogout,
+  onResendVerification,
+  canResendVerification,
+  loading,
+}) => (
   <section className="account-panel no-print">
     <div className="field-label">Account</div>
     {user ? (
@@ -973,48 +1051,74 @@ const AccountPanel = ({ user, mode, form, onModeChange, onFormChange, onSubmit, 
       <form onSubmit={onSubmit} className="account-form">
         <div className="auth-mode">
           <button type="button" className={mode === "login" ? "active" : ""} onClick={() => onModeChange("login")}>
-            Login
+            Sign in
           </button>
           <button type="button" className={mode === "register" ? "active" : ""} onClick={() => onModeChange("register")}>
-            Register
+            Create account
           </button>
         </div>
+        <div className="auth-form-heading">
+          <strong>{authContent[mode].title}</strong>
+          <span>{authContent[mode].body}</span>
+        </div>
         {mode === "register" ? (
-          <input value={form.name} placeholder="Name" onChange={(event) => onFormChange("name", event.target.value)} />
+          <label className="auth-field">
+            <span>Name</span>
+            <input value={form.name} placeholder="Your name" onChange={(event) => onFormChange("name", event.target.value)} />
+          </label>
         ) : null}
         {mode !== "reset" ? (
-          <input value={form.email} type="email" placeholder="Email" onChange={(event) => onFormChange("email", event.target.value)} />
+          <label className="auth-field">
+            <span>Email</span>
+            <input value={form.email} type="email" placeholder="you@example.com" onChange={(event) => onFormChange("email", event.target.value)} />
+          </label>
         ) : null}
         {mode === "reset" ? (
-          <input
-            value={form.resetToken}
-            placeholder="Reset token"
-            onChange={(event) => onFormChange("resetToken", event.target.value)}
-          />
+          <label className="auth-field">
+            <span>Reset token</span>
+            <input
+              value={form.resetToken}
+              placeholder="Paste reset token"
+              onChange={(event) => onFormChange("resetToken", event.target.value)}
+            />
+          </label>
         ) : null}
         {mode !== "forgot" ? (
-          <input
-            value={form.password}
-            type="password"
-            placeholder={mode === "reset" ? "New password" : "Password"}
-            onChange={(event) => onFormChange("password", event.target.value)}
-          />
+          <label className="auth-field">
+            <span>{mode === "reset" ? "New password" : "Password"}</span>
+            <input
+              value={form.password}
+              type="password"
+              placeholder={mode === "reset" ? "At least 8 characters" : "Your password"}
+              onChange={(event) => onFormChange("password", event.target.value)}
+            />
+          </label>
         ) : null}
         <button type="submit" className="inline-action" disabled={loading}>
-          {mode === "login" && "Sign in"}
-          {mode === "register" && "Create account"}
-          {mode === "forgot" && "Send reset"}
-          {mode === "reset" && "Reset password"}
+          {authContent[mode].submit}
         </button>
+        {mode === "login" && canResendVerification ? (
+          <div className="verify-callout">
+            <strong>Email verification pending</strong>
+            <span>Keep your password entered and request a fresh verification link.</span>
+            <button type="button" className="text-action" onClick={onResendVerification} disabled={loading}>
+              Resend verification email
+            </button>
+          </div>
+        ) : null}
         {mode === "login" ? (
-          <button type="button" className="text-action" onClick={() => onModeChange("forgot")}>
-            Forgot password?
-          </button>
+          <div className="auth-secondary">
+            <button type="button" className="text-action" onClick={() => onModeChange("forgot")}>
+              Forgot password?
+            </button>
+          </div>
         ) : null}
         {mode === "forgot" || mode === "reset" ? (
-          <button type="button" className="text-action" onClick={() => onModeChange("login")}>
-            Back to login
-          </button>
+          <div className="auth-secondary">
+            <button type="button" className="text-action" onClick={() => onModeChange("login")}>
+              Back to sign in
+            </button>
+          </div>
         ) : null}
       </form>
     )}

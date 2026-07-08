@@ -90,6 +90,16 @@ export async function loginUser(payload) {
   return result;
 }
 
+export async function resendVerificationEmail(payload) {
+  const response = await fetch(`${API_BASE}/api/auth/resend-verification`, {
+    method: "POST",
+    headers: apiHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(payload),
+  });
+
+  return readApiResponse(response);
+}
+
 export async function requestPasswordReset(payload) {
   const response = await fetch(`${API_BASE}/api/auth/forgot-password`, {
     method: "POST",
@@ -166,7 +176,11 @@ async function readApiResponse(response) {
   const body = await response.json().catch(() => ({}));
 
   if (!response.ok) {
-    throw new Error(body.error || `API request failed with ${response.status}`);
+    const error = new Error(body.error || `API request failed with ${response.status}`);
+    error.status = response.status;
+    error.code = body.code || "";
+    error.details = body;
+    throw error;
   }
 
   return body;
