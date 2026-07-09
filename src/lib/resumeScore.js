@@ -28,6 +28,63 @@ export function getResumeScore(resume) {
   };
 }
 
+export function getResumeLength(resume) {
+  const words = estimateResumeWords(resume);
+  const min = 250;
+  const max = 750;
+  const detailLimit = 800;
+
+  if (words < min) {
+    return {
+      words,
+      min,
+      max,
+      target: `${min}-${max} words`,
+      label: "Too short",
+      status: "short",
+      percent: Math.min(100, Math.round((words / min) * 45)),
+      message: "Add role-specific bullets, skills, projects, or education details so recruiters see enough substance.",
+    };
+  }
+
+  if (words <= 650) {
+    return {
+      words,
+      min,
+      max,
+      target: `${min}-${max} words`,
+      label: "Focused",
+      status: "ideal",
+      percent: Math.min(100, Math.round((words / max) * 100)),
+      message: "Good length for a focused one-page resume. Keep the strongest, most relevant details visible.",
+    };
+  }
+
+  if (words <= detailLimit) {
+    return {
+      words,
+      min,
+      max,
+      target: `${min}-${max} words`,
+      label: "Detailed",
+      status: "detailed",
+      percent: Math.min(100, Math.round((words / detailLimit) * 100)),
+      message: "Still usable, but check whether older or weaker details can be tightened before export.",
+    };
+  }
+
+  return {
+    words,
+    min,
+    max,
+    target: `${min}-${max} words`,
+    label: "Too long",
+    status: "long",
+    percent: 100,
+    message: "Trim repeated, older, or less relevant detail to keep the resume fast to scan.",
+  };
+}
+
 function scoreProfile(resume) {
   const profile = resume.profile || {};
   const fields = [profile.name, profile.title, profile.email, profile.phone, profile.location].filter(hasText).length;

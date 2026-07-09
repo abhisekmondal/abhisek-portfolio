@@ -30,6 +30,7 @@ import {
 } from "@/components/resume/ResumeEditor";
 import ResumePreview from "@/components/resume/ResumePreview";
 import { builderSettings, emptyResume, sampleResume } from "@/data/builderDefaults";
+import { exportResumePdfFromElement } from "@/lib/exportResumePdf";
 import {
   clone,
   getCompletion,
@@ -39,7 +40,7 @@ import {
   parseResumeJson,
   readStoredJson,
 } from "@/lib/resumeSchema";
-import { getResumeScore } from "@/lib/resumeScore";
+import { getResumeLength, getResumeScore } from "@/lib/resumeScore";
 import {
   checkApiHealth,
   deleteResumeFromApi,
@@ -123,6 +124,7 @@ const authContent = {
 
 const Home = () => {
   const fileInputRef = useRef(null);
+  const previewRef = useRef(null);
   const [activeTab, setActiveTab] = useState("profile");
   const [resume, setResume] = useState(() => readStoredJson(STORAGE_KEY, sampleResume, normalizeResume));
   const [settings, setSettings] = useState(() => readStoredJson(SETTINGS_KEY, builderSettings, normalizeSettings));
@@ -138,6 +140,7 @@ const Home = () => {
   const [apiMessage, setApiMessage] = useState("Checking cloud storage...");
   const [saveState, setSaveState] = useState("Saved");
   const [notice, setNotice] = useState("");
+  const [pageFit, setPageFit] = useState({ pages: 1, overflow: false, usedPercent: 0 });
 
   useEffect(() => {
     if (saveState !== "Saving") return undefined;
@@ -156,6 +159,50 @@ const Home = () => {
   const completion = useMemo(() => getCompletion(resume), [resume]);
   const issues = useMemo(() => getResumeIssues(resume), [resume]);
   const resumeScore = useMemo(() => getResumeScore(resume), [resume]);
+  const resumeLength = useMemo(() => getResumeLength(resume), [resume]);
+
+  useEffect(() => {
+    const preview = previewRef.current;
+    if (!preview) return undefined;
+
+    let frameId = 0;
+    const measurePageFit = () => {
+      const width = preview.getBoundingClientRect().width;
+      if (!width) return;
+
+      const onePageHeight = width * (297 / 210);
+      const contentHeight = preview.scrollHeight;
+      const pages = Math.max(1, Math.ceil((contentHeight - 4) / onePageHeight));
+      const usedPercent = Math.max(0, Math.round((contentHeight / onePageHeight) * 100));
+      const next = {
+        pages,
+        overflow: contentHeight > onePageHeight + 8,
+        usedPercent,
+      };
+
+      setPageFit((current) =>
+        current.pages === next.pages && current.overflow === next.overflow && current.usedPercent === next.usedPercent
+          ? current
+          : next,
+      );
+    };
+
+    const scheduleMeasure = () => {
+      window.cancelAnimationFrame(frameId);
+      frameId = window.requestAnimationFrame(measurePageFit);
+    };
+
+    scheduleMeasure();
+    const observer = new ResizeObserver(scheduleMeasure);
+    observer.observe(preview);
+    window.addEventListener("resize", scheduleMeasure);
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+      observer.disconnect();
+      window.removeEventListener("resize", scheduleMeasure);
+    };
+  }, [resume, settings]);
 
   const openScoreSuggestion = (suggestion) => {
     if (!suggestion.target) return;
@@ -364,40 +411,15 @@ const Home = () => {
   };
 
   const exportPdf = async () => {
-    const originalTitle = document.title;
     const fileBase = getExportFileName(resume);
 
     try {
       setNotice("Preparing PDF export...");
-      document.title = fileBase;
-      document.body.dataset.pdfExport = "true";
-
-      if (document.fonts?.ready) {
-        await document.fonts.ready;
-      }
-
-      window.setTimeout(() => {
-        window.print();
-      }, 80);
+      await exportResumePdfFromElement(previewRef.current, `${fileBase}.pdf`);
+      setNotice(`PDF exported: ${fileBase}.pdf`);
     } catch (error) {
       setNotice(`PDF export failed: ${error.message}`);
-      document.title = originalTitle;
-      delete document.body.dataset.pdfExport;
-      return;
     }
-
-    let cleanedUp = false;
-    const cleanup = () => {
-      if (cleanedUp) return;
-      cleanedUp = true;
-      document.title = originalTitle;
-      delete document.body.dataset.pdfExport;
-      window.removeEventListener("afterprint", cleanup);
-      setNotice(`PDF export ready: ${fileBase}.pdf`);
-    };
-
-    window.addEventListener("afterprint", cleanup);
-    window.setTimeout(cleanup, 3000);
   };
 
   const importResume = async (event) => {
@@ -785,6 +807,8 @@ const Home = () => {
       <main className="builder-layout">
         <aside className="builder-panel no-print">
           <ResumeScoreCard score={resumeScore} completion={completion} onOpenSuggestion={openScoreSuggestion} />
+          <ResumeLengthCard length={resumeLength} />
+          <PageFitCard pageFit={pageFit} onUseCompact={() => setSettings((current) => ({ ...current, density: "compact" }))} />
 
           <StartPanel
             onBlank={clearResume}
@@ -966,7 +990,7 @@ const Home = () => {
             </span>
           </div>
 
-          <ResumePreview resume={resume} settings={settings} />
+          <ResumePreview ref={previewRef} resume={resume} settings={settings} />
         </section>
       </main>
     </div>
@@ -1096,6 +1120,52 @@ const ResumeScoreCard = ({ score, completion, onOpenSuggestion }) => (
     ) : (
       <p className="score-done">No major gaps detected.</p>
     )}
+  </section>
+);
+
+const ResumeLengthCard = ({ length }) => (
+  <section className="resume-length-card no-print">
+    <div className="length-card-head">
+      <div>
+        <div className="field-label">Resume length</div>
+        <strong>{length.words.toLocaleString()} words</strong>
+      </div>
+      <span className={`length-grade length-${length.status}`}>{length.label}</span>
+    </div>
+    <div className="length-meter" aria-label={`Resume length ${length.words} words. Target ${length.target}`}>
+      <span style={{ width: `${length.percent}%` }} />
+    </div>
+    <div className="length-bounds">
+      <span>{length.min}</span>
+      <span>Target {length.target}</span>
+      <span>{length.max}</span>
+    </div>
+    <p>{length.message}</p>
+  </section>
+);
+
+const PageFitCard = ({ pageFit, onUseCompact }) => (
+  <section className={`page-fit-card ${pageFit.overflow ? "page-fit-overflow" : "page-fit-ok"} no-print`}>
+    <div className="page-fit-head">
+      <div>
+        <div className="field-label">A4 page fit</div>
+        <strong>{pageFit.overflow ? `${pageFit.pages} pages` : "Fits 1 page"}</strong>
+      </div>
+      <span>{Math.min(pageFit.usedPercent, 999)}%</span>
+    </div>
+    <div className="page-fit-meter" aria-label={`Resume uses ${pageFit.usedPercent}% of one A4 page`}>
+      <span style={{ width: `${Math.min(pageFit.usedPercent, 100)}%` }} />
+    </div>
+    <p>
+      {pageFit.overflow
+        ? "This resume currently spills beyond a single A4 page. Use Compact density, trim bullets, or hide lower-priority sections."
+        : "Current content fits inside one A4 page for the selected template and density."}
+    </p>
+    {pageFit.overflow ? (
+      <button type="button" className="page-fit-action" onClick={onUseCompact}>
+        Use Compact density
+      </button>
+    ) : null}
   </section>
 );
 

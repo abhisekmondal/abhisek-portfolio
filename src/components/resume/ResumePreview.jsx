@@ -1,4 +1,4 @@
-import React from "react";
+import React, { forwardRef } from "react";
 import { Mail, MapPin, Phone } from "lucide-react";
 import {
   hasCertificationContent,
@@ -8,7 +8,7 @@ import {
   hasSkillGroupContent,
 } from "@/lib/resumeSchema";
 
-const ResumePreview = ({ resume, settings }) => {
+const ResumePreview = forwardRef(({ resume, settings }, ref) => {
   const sections = resume.sections || {};
   const contact = [
     { icon: Mail, value: resume.profile.email },
@@ -19,6 +19,7 @@ const ResumePreview = ({ resume, settings }) => {
 
   return (
     <article
+      ref={ref}
       className={`resume-preview template-${settings.template} density-${settings.density}`}
       style={{ "--resume-accent": settings.accent }}
     >
@@ -123,7 +124,9 @@ const ResumePreview = ({ resume, settings }) => {
       </div>
     </article>
   );
-};
+});
+
+ResumePreview.displayName = "ResumePreview";
 
 const PreviewSection = ({ title, visible, children }) => {
   if (!visible) return null;
