@@ -30,6 +30,7 @@ import {
 } from "@/components/resume/ResumeEditor";
 import ResumePreview from "@/components/resume/ResumePreview";
 import { builderSettings, emptyResume, sampleResume } from "@/data/builderDefaults";
+import { exportResumeDocx } from "@/lib/exportResumeDocx";
 import { exportResumePdfFromElement } from "@/lib/exportResumePdf";
 import {
   clone,
@@ -422,6 +423,18 @@ const Home = () => {
     }
   };
 
+  const exportDocx = async () => {
+    const fileBase = getExportFileName(resume);
+
+    try {
+      setNotice("Preparing DOCX export...");
+      await exportResumeDocx(normalizeResume(resume), `${fileBase}.docx`);
+      setNotice(`DOCX exported: ${fileBase}.docx`);
+    } catch (error) {
+      setNotice(`DOCX export failed: ${error.message}`);
+    }
+  };
+
   const importResume = async (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -781,6 +794,9 @@ const Home = () => {
           <CloudStatus status={apiStatus} loading={cloudLoading} message={apiMessage} />
           <button className="btn btn-ghost" onClick={exportJson}>
             <FileJson size={14} /> Export
+          </button>
+          <button className="btn btn-ghost" onClick={exportDocx}>
+            <FileText size={14} /> Export DOCX
           </button>
           <button className="btn btn-ghost" onClick={loadLatestFromCloud} disabled={cloudLoading}>
             <Cloud size={14} /> Load Latest
