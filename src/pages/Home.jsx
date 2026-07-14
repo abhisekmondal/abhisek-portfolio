@@ -415,7 +415,7 @@ const Home = () => {
 
     try {
       setNotice("Preparing PDF export...");
-      await exportResumePdfFromElement(previewRef.current, `${fileBase}.pdf`);
+      await exportResumePdfFromElement(previewRef.current, `${fileBase}.pdf`, normalizeResume(resume));
       setNotice(`PDF exported: ${fileBase}.pdf`);
     } catch (error) {
       setNotice(`PDF export failed: ${error.message}`);

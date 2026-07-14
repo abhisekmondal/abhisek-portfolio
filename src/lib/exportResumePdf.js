@@ -6,7 +6,7 @@ const A4 = {
   heightPt: 841.89,
 };
 
-export async function exportResumePdfFromElement(sourceElement, fileName = "resume.pdf") {
+export async function exportResumePdfFromElement(sourceElement, fileName = "resume.pdf", resume = null) {
   if (!sourceElement) {
     throw new Error("Resume preview is not ready for export.");
   }
@@ -45,10 +45,12 @@ export async function exportResumePdfFromElement(sourceElement, fileName = "resu
       const pageCanvas = cropCanvas(canvas, startY, endY - startY);
       const pageHeightPt = (pageCanvas.height * A4.widthPt) / pageCanvas.width;
       if (index > 0) doc.addPage();
+      if (index === 0) addSearchableTextLayer(doc, resume);
       doc.addImage(pageCanvas.toDataURL("image/jpeg", 0.96), "JPEG", 0, 0, A4.widthPt, pageHeightPt);
     });
 
     if (pageBreaks.length === 1) {
+      addSearchableTextLayer(doc, resume);
       doc.addImage(canvas.toDataURL("image/jpeg", 0.96), "JPEG", 0, 0, A4.widthPt, (canvas.height * A4.widthPt) / canvas.width);
     }
 
@@ -56,6 +58,110 @@ export async function exportResumePdfFromElement(sourceElement, fileName = "resu
   } finally {
     exportNode.remove();
   }
+}
+
+function addSearchableTextLayer(doc, resume) {
+  const text = buildResumeText(resume);
+  if (!text) return;
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(1);
+  doc.setTextColor(255, 255, 255);
+
+  const lines = doc.splitTextToSize(text, A4.widthPt - 24);
+  let y = 6;
+  lines.forEach((line) => {
+    if (y > A4.heightPt - 6) return;
+    doc.text(line, 6, y);
+    y += 2;
+  });
+}
+
+function buildResumeText(resume) {
+  if (!resume || typeof resume !== "object") return "";
+
+  const profile = resume.profile || {};
+  const sections = resume.sections || {};
+  const parts = [
+    profile.name,
+    profile.title,
+    profile.email,
+    profile.phone,
+    profile.location,
+    profile.website,
+    profile.linkedin,
+    profile.github,
+  ];
+
+  if (sections.summary !== false) {
+    parts.push("Professional Summary", resume.summary);
+  }
+
+  if (sections.skills !== false) {
+    parts.push(
+      "Core Skills",
+      ...(resume.skills || []).map((group) => formatSkillGroup(group)),
+    );
+  }
+
+  if (sections.experience !== false) {
+    parts.push(
+      "Professional Experience",
+      ...(resume.experience || []).flatMap((item) => [
+        [item.role, item.company, item.location, item.start, item.end].filter(Boolean).join(" | "),
+        ...normalizeBullets(item.bullets),
+      ]),
+    );
+  }
+
+  if (sections.projects !== false) {
+    parts.push(
+      "Projects",
+      ...(resume.projects || []).flatMap((item) => [
+        [item.name, item.role, item.url].filter(Boolean).join(" | "),
+        ...normalizeBullets(item.bullets),
+      ]),
+    );
+  }
+
+  if (sections.education !== false) {
+    parts.push(
+      "Education",
+      ...(resume.education || []).map((item) =>
+        [item.degree, item.institute, item.location, item.year].filter(Boolean).join(" | "),
+      ),
+    );
+  }
+
+  if (sections.certifications !== false) {
+    parts.push(
+      "Certifications",
+      ...(resume.certifications || []).map((item) =>
+        [item.name, item.issuer, item.year, item.url].filter(Boolean).join(" | "),
+      ),
+    );
+  }
+
+  return parts
+    .flat()
+    .map((part) => String(part || "").replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
+function formatSkillGroup(group) {
+  const label = String(group?.label || "").trim();
+  const items = (group?.items || []).map((item) => String(item || "").trim()).filter(Boolean);
+  if (!items.length) return label;
+  if (!label || label.toLowerCase() === "core skills") return items.join(", ");
+  return `${label}: ${items.join(", ")}`;
+}
+
+function normalizeBullets(bullets = []) {
+  return bullets
+    .flatMap((bullet) => String(bullet || "").split(/\s*•\s*/))
+    .map((bullet) => bullet.replace(/^[-*]\s*/, "").replace(/\s+/g, " ").trim())
+    .filter(Boolean);
 }
 
 function createExportNode(sourceElement) {
